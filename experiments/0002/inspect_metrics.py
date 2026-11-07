@@ -1,4 +1,4 @@
-"""Inspect the ``0001/`` scalars of a run directory (acceptance helper)."""
+"""Inspect the ``0002/`` scalars of a run directory (acceptance helper)."""
 
 from __future__ import annotations
 
@@ -21,17 +21,17 @@ def load(log_dir: Path) -> dict[str, list[tuple[int, float]]]:
 def main(argv: list[str]) -> int:
   log_dir = Path(argv[1])
   tags = load(log_dir)
-  prefixed = {k: v for k, v in tags.items() if k.startswith("0001/")}
+  prefixed = {k: v for k, v in tags.items() if k.startswith("0002/")}
   if len(argv) > 2 and argv[2] == "--tags":
     for tag in sorted(prefixed):
       print(tag)
     return 0
 
-  print(f"total scalar tags: {len(tags)}, 0001/* tags: {len(prefixed)}")
+  print(f"total scalar tags: {len(tags)}, 0002/* tags: {len(prefixed)}")
   missing = [
     "Reward/task_raw_mean",
     "Reward/smp_raw_mean",
-    "Reward/product_raw_mean",
+    "Reward/additive_raw_mean",
     "Reward/env_reward_mean",
     "Task/target_distance_mean_m",
     "Motion/horizontal_speed_mean_mps",
@@ -52,8 +52,8 @@ def main(argv: list[str]) -> int:
     "Time/training_elapsed_s",
   ]
   for name in missing:
-    if f"0001/{name}" not in prefixed:
-      print(f"MISSING required tag: 0001/{name}")
+    if f"0002/{name}" not in prefixed:
+      print(f"MISSING required tag: 0002/{name}")
 
   steps: defaultdict[str, set[int]] = defaultdict(set)
   for tag, values in prefixed.items():
@@ -62,7 +62,7 @@ def main(argv: list[str]) -> int:
   print(f"steps range: {all_steps[0]}..{all_steps[-1]} ({len(all_steps)} iterations)")
 
   def series(name: str) -> dict[int, float]:
-    return dict(prefixed.get(f"0001/{name}", []))
+    return dict(prefixed.get(f"0002/{name}", []))
 
   ended = series("Count/ended_episode")
   failure = series("Count/failure_episode")
@@ -94,7 +94,7 @@ def main(argv: list[str]) -> int:
       f"startup={startup.get(step, 0):.0f} "
       f"task={series('Reward/task_raw_mean')[step]:.5f} "
       f"smp={series('Reward/smp_raw_mean')[step]:.5f} "
-      f"prod={series('Reward/product_raw_mean')[step]:.5f} "
+      f"additive={series('Reward/additive_raw_mean')[step]:.5f} "
       f"env={series('Reward/env_reward_mean')[step]:.5f} "
       f"dist={series('Task/target_distance_mean_m')[step]:.3f} "
       f"speed={series('Motion/horizontal_speed_mean_mps')[step]:.3f}"
@@ -102,9 +102,9 @@ def main(argv: list[str]) -> int:
   last = sorted(ended)[-1]
   print(
     f"last it={last}: samples={samples[last]:.0f} iters={iters[last]:.0f} "
-    f"ratio env/prod={series('Reward/env_reward_mean')[last] / max(series('Reward/product_raw_mean')[last], 1e-12):.4f}"
+    f"ratio env/additive={series('Reward/env_reward_mean')[last] / max(series('Reward/additive_raw_mean')[last], 1e-12):.4f}"
   )
-  opt_tags = sorted(t for t in prefixed if t.startswith(("0001/Episode/", "0001/Failure/")))
+  opt_tags = sorted(t for t in prefixed if t.startswith(("0002/Episode/", "0002/Failure/")))
   for tag in opt_tags:
     values = prefixed[tag]
     print(f"optional {tag}: n={len(values)} last={values[-1][1]:.4f} step={values[-1][0]}")

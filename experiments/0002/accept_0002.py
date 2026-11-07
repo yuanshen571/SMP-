@@ -1,4 +1,4 @@
-"""Stage B acceptance for experiment ``0001`` (no policy updates).
+"""Stage B acceptance for experiment ``0002`` (no policy updates).
 
 Runs a short, separate process that only steps the environment with random
 actions.  It checks the facts EXECUTION.md §B asks for:
@@ -8,7 +8,7 @@ actions.  It checks the facts EXECUTION.md §B asks for:
 * termination / timeout masks and the 10-frame critic history;
 * finite observations and rewards;
 * reward decomposition and the ``scale_rewards_by_dt`` identity
-  ``env_reward == weight * 0.02 * r_task * r_smp`` (single reward term);
+  ``env_reward == weight * 0.02 * (0.5*r_task + 0.5*r_smp)`` (single reward term);
 * episode statistics across rollout iterations, including partial resets,
   simultaneous failure+timeout classification and the randomly offset first
   episode (``startup_incomplete_episode``), compared against an independent
@@ -42,7 +42,7 @@ from tensorboard.backend.event_processing.event_accumulator import (  # noqa: E4
 from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-  "smp_experiment_0001_metrics", Path(__file__).with_name("passive_metrics.py")
+  "smp_experiment_0002_metrics", Path(__file__).with_name("passive_metrics.py")
 )
 assert _spec is not None and _spec.loader is not None
 pm = importlib.util.module_from_spec(_spec)
@@ -65,7 +65,7 @@ class NaiveTracker:
     self.step_dt = step_dt
     self.device = torch.device(device)
     self.startup = torch.ones(num_envs, dtype=torch.bool, device=self.device)
-    self.ep_product = torch.zeros(num_envs, dtype=torch.float64, device=self.device)
+    self.ep_task = torch.zeros(num_envs, dtype=torch.float64, device=self.device)
     self.ep_reward = torch.zeros(num_envs, dtype=torch.float64, device=self.device)
     self.ep_steps = torch.zeros(num_envs, dtype=torch.long, device=self.device)
     self.reset()
@@ -94,6 +94,7 @@ class NaiveTracker:
       "complete_timeout": self.complete_timeout,
       "sum_len": self.sum_len,
       "sum_fail_dur": self.sum_fail_dur,
+      "sum_task_ret": self.sum_task_ret,
       "sum_train_ret": self.sum_train_ret,
     }
 
@@ -119,9 +120,9 @@ class NaiveTracker:
       self.complete_timeout += int((complete & timeout_only).sum())
       self.sum_len += float(lengths[complete].double().sum())
       self.sum_fail_dur += float(lengths[complete & failure].double().sum()) * self.step_dt
-      self.sum_task_ret += float(self.ep_product[ids][complete].sum())
+      self.sum_task_ret += float(self.ep_task[ids][complete].sum())
       self.sum_train_ret += float(self.ep_reward[ids][complete].sum())
-    self.ep_product[ids] = 0.0
+    self.ep_task[ids] = 0.0
     self.ep_reward[ids] = 0.0
     self.ep_steps[ids] = 0
     self.startup[ids] = False
@@ -143,23 +144,36 @@ def main(argv: list[str] | None = None) -> int:
   env_cfg = load_env_cfg(TASK_ID, play=False)
   env_cfg.scene.num_envs = args.num_envs
   env_cfg.seed = args.seed
-  weight = float(env_cfg.rewards["task_smp_product"].weight)
+  weight = float(env_cfg.rewards["task_smp_additive"].weight)
 
   holder: dict[str, torch.Tensor] = {}
-  metrics_term = pm.build_logged_task_smp_product()
+  metrics_term = pm.build_logged_task_smp_additive()
 
-  def probe(env, task_terms, fixed_timesteps=(8, 15, 22), ws=6.0):
-    value = metrics_term(
-      env, task_terms=task_terms, fixed_timesteps=fixed_timesteps, ws=ws
+  # Observe tensors from the single reward call; never recompute task/guidance.
+  class Capture:
+    metrics = None
+
+    def record_step(self, env, task, smp, additive, task_terms):
+      holder["task"] = task.detach()
+      holder["smp"] = smp.detach()
+      holder["additive"] = additive.detach()
+      tr = holder.get("tracker")
+      if tr is not None:
+        tr.ep_task += task.detach().double()
+      if self.metrics is not None:
+        self.metrics.record_step(env, task, smp, additive, task_terms)
+
+  capture = Capture()
+  metrics_term.metrics = capture
+
+  def probe(env, task_terms, fixed_timesteps=(8, 15, 22), ws=6.0,
+            task_reward_weight=0.5, smp_reward_weight=0.5):
+    return metrics_term(
+      env, task_terms=task_terms, fixed_timesteps=fixed_timesteps, ws=ws,
+      task_reward_weight=task_reward_weight, smp_reward_weight=smp_reward_weight,
     )
-    holder["product"] = value.detach()
-    tr = holder.get("tracker")
-    if tr is not None:
-      # accumulated during the reward stage, i.e. before auto-reset zeroes it
-      tr.ep_product += value.detach().double()
-    return value
 
-  env_cfg.rewards["task_smp_product"].func = probe
+  env_cfg.rewards["task_smp_additive"].func = probe
 
   torch.manual_seed(args.seed)
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=None)
@@ -234,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
   tracker = NaiveTracker(env.num_envs, env.step_dt, env.device)
   holder["tracker"] = tracker
   metrics = pm.PassiveMetrics(env, steps_per_env=args.steps_per_env)
-  metrics_term.metrics = metrics
+  capture.metrics = metrics
 
   # The tracker must accumulate the step reward BEFORE auto-reset clears the
   # per-env buffers (same ordering the metrics layer uses).
@@ -272,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
   gen = torch.Generator(device="cpu").manual_seed(args.seed + 1)
   partial_reset_seen = False
   reward_identity_fail = 0
+  additive_identity_fail = 0
   length_consistency_fail = 0
   simult = 0
   buffer_subset_checked = False
@@ -299,14 +314,19 @@ def main(argv: list[str] | None = None) -> int:
       )
       obs, rew, terminated, time_outs, extras = env.step(actions)
       collect += 0.0
-      product = holder["product"]
+      additive = holder["additive"]
+      if not bool(torch.allclose(
+        additive, 0.5 * holder["task"] + 0.5 * holder["smp"],
+        rtol=1e-6, atol=1e-7,
+      )):
+        additive_identity_fail += 1
 
       if not bool(torch.isfinite(rew).all()):
         check("reward finite", False, f"step {k + 1}")
       if not bool(torch.isfinite(obs["actor"]).all()):
         check("actor obs finite during rollout", False, f"step {k + 1}")
 
-      expected = product * weight * env.step_dt
+      expected = additive * weight * env.step_dt
       if not bool(torch.allclose(rew, expected, rtol=1e-5, atol=1e-7)):
         reward_identity_fail += 1
         if reward_identity_fail == 1:
@@ -359,8 +379,10 @@ def main(argv: list[str] | None = None) -> int:
     prev_snapshot = now
 
   # ------------------------------------------------------------- assertions
+  check("additive == 0.5*task + 0.5*smp on every step",
+        additive_identity_fail == 0, f"{additive_identity_fail} mismatching steps")
   check(
-    "env reward == weight*dt*r_product on every step",
+    "env reward == weight*dt*r_additive on every step",
     reward_identity_fail == 0,
     f"{reward_identity_fail} mismatching steps",
   )
@@ -402,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
   acc.Reload()
   series: dict[str, dict[int, float]] = {}
   for tag in acc.Tags().get("scalars", []):
-    if tag.startswith("0001/"):
+    if tag.startswith("0002/"):
       series[tag] = {int(e.step): float(e.value) for e in acc.Scalars(tag)}
 
   compare = (
@@ -415,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     "Count/startup_incomplete_episode",
     "Sum/complete_episode_length_steps",
     "Sum/complete_failure_duration_s",
+    "Sum/complete_task_return_raw",
     "Sum/complete_training_return",
   )
   key = {
@@ -427,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     "Count/startup_incomplete_episode": "startup",
     "Sum/complete_episode_length_steps": "sum_len",
     "Sum/complete_failure_duration_s": "sum_fail_dur",
+    "Sum/complete_task_return_raw": "sum_task_ret",
     "Sum/complete_training_return": "sum_train_ret",
   }
   mismatch = 0
@@ -434,9 +458,9 @@ def main(argv: list[str] | None = None) -> int:
     step = entry["iteration"]
     for name in compare:
       expected_value = entry["tracker"][key[name]] - entry["prev"][key[name]]
-      got = series.get(f"0001/{name}", {}).get(step)
+      got = series.get(f"0002/{name}", {}).get(step)
       if got is None:
-        print(f"  missing tag 0001/{name} at step {step}")
+        print(f"  missing tag 0002/{name} at step {step}")
         mismatch += 1
         continue
       if abs(got - expected_value) > 1e-6 * max(1.0, abs(expected_value)):
@@ -448,11 +472,11 @@ def main(argv: list[str] | None = None) -> int:
     f"{mismatch} mismatches over {len(compare)} x {len(per_iteration)} values",
   )
 
-  ended = series.get("0001/Count/ended_episode", {})
-  failure = series.get("0001/Count/failure_episode", {})
-  timeout = series.get("0001/Count/timeout_only_episode", {})
-  complete = series.get("0001/Count/complete_episode", {})
-  startup = series.get("0001/Count/startup_incomplete_episode", {})
+  ended = series.get("0002/Count/ended_episode", {})
+  failure = series.get("0002/Count/failure_episode", {})
+  timeout = series.get("0002/Count/timeout_only_episode", {})
+  complete = series.get("0002/Count/complete_episode", {})
+  startup = series.get("0002/Count/startup_incomplete_episode", {})
   identity_bad = 0
   for step in ended:
     if failure.get(step, 0) + timeout.get(step, 0) != ended[step]:
@@ -484,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
   (out / "acceptance.json").write_text(
     json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
   )
-  lines = ["# 0001 stage-B acceptance", ""]
+  lines = ["# 0002 stage-B acceptance", ""]
   lines += [f"- [{'x' if ok else ' '}] {n}" + (f" — {d}" if d else "") for n, ok, d in CHECKS]
   (out / "acceptance.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
   print(f"\n{len(CHECKS) - len(failures)}/{len(CHECKS)} checks passed")

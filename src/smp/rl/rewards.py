@@ -88,3 +88,21 @@ def task_smp_product(
   sole SMP-buffer update), so it must be the task's only SMP reward term."""
   task = sum(w * func(env, **kw) for func, w, kw in task_terms)
   return task * smp_guidance_reward(env, fixed_timesteps=fixed_timesteps, ws=ws)
+
+
+def task_smp_additive(
+  env: ManagerBasedRlEnv,
+  task_terms: tuple[TaskTerm, ...],
+  fixed_timesteps: tuple[int, ...] = (8, 15, 22),
+  ws: float = 6.0,
+  task_reward_weight: float = 0.5,
+  smp_reward_weight: float = 0.5,
+) -> torch.Tensor:
+  """Original SMP outer weights, with the G1 reward components unchanged.
+
+  Call guidance exactly once: it advances the motion window and samples noise.
+  The reward manager applies its existing weight and control-dt scaling later.
+  """
+  task = sum(w * func(env, **kw) for func, w, kw in task_terms)
+  smp = smp_guidance_reward(env, fixed_timesteps=fixed_timesteps, ws=ws)
+  return task_reward_weight * task + smp_reward_weight * smp

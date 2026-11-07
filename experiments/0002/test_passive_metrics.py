@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import torch
 
 _spec = importlib.util.spec_from_file_location(
-  "smp_experiment_0001_metrics", Path(__file__).with_name("passive_metrics.py")
+  "smp_experiment_0002_metrics", Path(__file__).with_name("passive_metrics.py")
 )
 assert _spec is not None and _spec.loader is not None
 pm = importlib.util.module_from_spec(_spec)
@@ -71,10 +71,10 @@ def test_rng_neutral() -> None:
   torch.manual_seed(1234)
   task = torch.full((env.num_envs,), 0.5)
   smp = torch.full((env.num_envs,), 0.25)
-  product = task * smp
+  additive = 0.5 * task + 0.5 * smp
   for _ in range(5):
-    metrics.record_step(env, task, smp, product, task_terms)
-    metrics.record_env_reward(product * 0.02)
+    metrics.record_step(env, task, smp, additive, task_terms)
+    metrics.record_env_reward(additive * 0.02)
   metrics.on_reset_idx(env, None)
   metrics.on_iteration(writer, 0, 0.1, 0.05)
   assert torch.equal(torch.randn(8), control), "logging path consumed RNG"
@@ -103,20 +103,20 @@ def test_count_identities() -> None:
   metrics.on_iteration(writer, 0, 1.0, 1.0)
 
   s = {k: v[-1][0] for k, v in writer.scalars.items()}
-  assert s["0001/Count/ended_episode"] == 10, s
-  assert s["0001/Count/failure_episode"] == 4, s
-  assert s["0001/Count/timeout_only_episode"] == 4, s
-  assert s["0001/Count/startup_incomplete_episode"] == 2, s
-  assert s["0001/Count/complete_episode"] == 8, s
-  assert s["0001/Count/complete_failure_episode"] == 4, s
-  assert s["0001/Count/complete_timeout_only_episode"] == 4, s
-  assert s["0001/Reward/product_raw_mean"] == 0.0
-  assert s["0001/Progress/completed_iterations"] == 1
-  assert s["0001/Progress/training_samples"] == 1 * 24 * n
+  assert s["0002/Count/ended_episode"] == 10, s
+  assert s["0002/Count/failure_episode"] == 4, s
+  assert s["0002/Count/timeout_only_episode"] == 4, s
+  assert s["0002/Count/startup_incomplete_episode"] == 2, s
+  assert s["0002/Count/complete_episode"] == 8, s
+  assert s["0002/Count/complete_failure_episode"] == 4, s
+  assert s["0002/Count/complete_timeout_only_episode"] == 4, s
+  assert s["0002/Reward/additive_raw_mean"] == 0.0
+  assert s["0002/Progress/completed_iterations"] == 1
+  assert s["0002/Progress/training_samples"] == 1 * 24 * n
   print("PASS count identities")
 
 
-def test_product_of_means_not_used() -> None:
+def test_additive_mean_identity() -> None:
   n = 4
   env = make_env(n)
   metrics = pm.PassiveMetrics(env, steps_per_env=24)
@@ -124,16 +124,16 @@ def test_product_of_means_not_used() -> None:
   task_terms = ((lambda e, **kw: torch.zeros(e.num_envs), 1.0, {"command_name": "location"}),)
   task = torch.tensor([1.0, 1.0, 0.0, 0.0])
   smp = torch.tensor([0.0, 1.0, 1.0, 0.0])
-  metrics.record_step(env, task, smp, task * smp, task_terms)
-  metrics.record_env_reward(task * smp)
+  metrics.record_step(env, task, smp, 0.5 * task + 0.5 * smp, task_terms)
+  metrics.record_env_reward((0.5 * task + 0.5 * smp) * 0.02)
   metrics.on_iteration(writer, 0, 1.0, 1.0)
   s = {k: v[-1][0] for k, v in writer.scalars.items()}
-  assert abs(s["0001/Reward/task_raw_mean"] - 0.5) < 1e-9
-  assert abs(s["0001/Reward/smp_raw_mean"] - 0.5) < 1e-9
-  assert abs(s["0001/Reward/product_raw_mean"] - 0.25) < 1e-9  # not 0.5*0.5 bug
-  assert "0001/Episode/complete_task_return_raw_mean" not in s
-  assert s["0001/Progress/training_samples"] == 24 * n
-  print("PASS product-then-mean and skip-empty-denominator")
+  assert abs(s["0002/Reward/task_raw_mean"] - 0.5) < 1e-9
+  assert abs(s["0002/Reward/smp_raw_mean"] - 0.5) < 1e-9
+  assert abs(s["0002/Reward/additive_raw_mean"] - 0.5) < 1e-9  # weighted sum, not multiplication
+  assert "0002/Episode/complete_task_return_raw_mean" not in s
+  assert s["0002/Progress/training_samples"] == 24 * n
+  print("PASS additive-mean identity and skip-empty-denominator")
 
 
 def test_simultaneous_termination_counts_as_failure() -> None:
@@ -154,9 +154,9 @@ def test_simultaneous_termination_counts_as_failure() -> None:
   metrics.on_reset_idx(env, torch.arange(3))
   metrics.on_iteration(writer, 0, 1.0, 1.0)
   s = {k: v[-1][0] for k, v in writer.scalars.items()}
-  assert s["0001/Count/ended_episode"] == 3, s
-  assert s["0001/Count/failure_episode"] == 2, s
-  assert s["0001/Count/timeout_only_episode"] == 1, s
+  assert s["0002/Count/ended_episode"] == 3, s
+  assert s["0002/Count/failure_episode"] == 2, s
+  assert s["0002/Count/timeout_only_episode"] == 1, s
   print("PASS simultaneous termination+timeout counted as failure")
 
 
@@ -179,16 +179,16 @@ def test_iteration_without_episode_end() -> None:
     "Count/complete_episode",
     "Count/startup_incomplete_episode",
   ):
-    assert s[f"0001/{name}"] == 0.0, (name, s)
-  assert not any(k.startswith("0001/Episode/") for k in s), s
-  assert not any(k.startswith(("0001/Episode/", "0001/Failure/")) for k in s), s
+    assert s[f"0002/{name}"] == 0.0, (name, s)
+  assert not any(k.startswith("0002/Episode/") for k in s), s
+  assert not any(k.startswith(("0002/Episode/", "0002/Failure/")) for k in s), s
   print("PASS empty-denominator iteration writes zero counts and skips means")
 
 
 if __name__ == "__main__":
   test_rng_neutral()
   test_count_identities()
-  test_product_of_means_not_used()
+  test_additive_mean_identity()
   test_simultaneous_termination_counts_as_failure()
   test_iteration_without_episode_end()
   print("all passive-metrics unit checks passed")

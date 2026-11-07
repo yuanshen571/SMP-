@@ -1,9 +1,9 @@
-"""Passive TensorBoard metrics for experiment ``0001`` (``Smp-Location-G1``).
+"""Passive TensorBoard metrics for experiment ``0002`` (``Smp-Location-G1``).
 
 This module implements the observation layer required by
-``experiments/0001/EXECUTION.md`` §7-§8.  It is *passive*:
+`experiments/0002/EXECUTION.md`.  It is *passive*:
 
-* the reward formula is untouched - ``r_product = r_task * r_smp`` is computed
+* the reward formula is untouched - ``r_additive = 0.5*r_task + 0.5*r_smp`` is computed
   exactly as before (``smp_guidance_reward`` is still called once per step);
 * every reported value is cached from a tensor the environment already
   produced in that step (no recomputation, no extra ``reset``/``forward``);
@@ -11,7 +11,7 @@ This module implements the observation layer required by
 * the episode-end mask is read at ``_reset_idx`` entry, i.e. before the
   automatic reset clears/shuffles the termination buffers.
 
-TensorBoard names live under the ``0001/`` namespace and are written with
+TensorBoard names live under the ``0002/`` namespace and are written with
 ``global_step = completed_iterations`` (1-based, so the last point is 10000).
 """
 
@@ -24,7 +24,7 @@ import torch
 
 from smp.rl.rewards import smp_guidance_reward
 
-NS = "0001"
+NS = "0002"
 
 
 def _as_ids(
@@ -80,7 +80,7 @@ class PassiveMetrics:
     z = torch.zeros((), dtype=torch.float64, device=self.device)
     self.s_task = z.clone()
     self.s_smp = z.clone()
-    self.s_product = z.clone()
+    self.s_additive = z.clone()
     self.s_env_reward = z.clone()
     self.s_distance = z.clone()
     self.s_speed = z.clone()
@@ -104,10 +104,10 @@ class PassiveMetrics:
     env: Any,
     task: torch.Tensor,
     smp: torch.Tensor,
-    product: torch.Tensor,
+    additive: torch.Tensor,
     task_terms: tuple[Any, ...],
   ) -> None:
-    """Cache ``r_task``, ``r_smp``, ``r_product`` and the step's state metrics."""
+    """Cache ``r_task``, ``r_smp``, ``r_additive`` and the step's state metrics."""
     if self._cmd_term is None:
       name = self.command_name
       for _func, _weight, kwargs in task_terms:
@@ -119,14 +119,14 @@ class PassiveMetrics:
     self._active = True
     with torch.no_grad():
       task_d = task.detach().double()
-      product_d = product.detach().double()
+      additive_d = additive.detach().double()
       root_xy = self._robot.data.root_link_pos_w[:, :2]
       distance = (self._cmd_term.tar_pos_w - root_xy).norm(dim=-1).double()
       speed = self._robot.data.root_link_lin_vel_w[:, :2].norm(dim=-1).double()
 
       self.s_task += task_d.sum()
       self.s_smp += smp.detach().double().sum()
-      self.s_product += product_d.sum()
+      self.s_additive += additive_d.sum()
       self.s_distance += distance.sum()
       self.s_speed += speed.sum()
       self.n_steps += self.num_envs
@@ -225,7 +225,7 @@ class PassiveMetrics:
 
     add(f"{NS}/Reward/task_raw_mean", self.s_task.item() / n_f, step)
     add(f"{NS}/Reward/smp_raw_mean", self.s_smp.item() / n_f, step)
-    add(f"{NS}/Reward/product_raw_mean", self.s_product.item() / n_f, step)
+    add(f"{NS}/Reward/additive_raw_mean", self.s_additive.item() / n_f, step)
     add(f"{NS}/Reward/env_reward_mean", self.s_env_reward.item() / n_f, step)
     add(f"{NS}/Task/target_distance_mean_m", self.s_distance.item() / n_f, step)
     add(f"{NS}/Motion/horizontal_speed_mean_mps", self.s_speed.item() / n_f, step)
@@ -280,10 +280,10 @@ class PassiveMetrics:
       writer.flush()
 
 
-def build_logged_task_smp_product(
+def build_logged_task_smp_additive(
   command_name: str = "location",
 ) -> Callable[..., torch.Tensor]:
-  """Drop-in replacement for ``smp.rl.rewards.task_smp_product``.
+  """Drop-in replacement for ``smp.rl.rewards.task_smp_additive``.
 
   Identical math (one ``smp_guidance_reward`` call, same weights/params); the
   only addition is caching the three raw values for ``PassiveMetrics``.
@@ -294,17 +294,19 @@ def build_logged_task_smp_product(
     task_terms: tuple[Any, ...],
     fixed_timesteps: tuple[int, ...] = (8, 15, 22),
     ws: float = 6.0,
+    task_reward_weight: float = 0.5,
+    smp_reward_weight: float = 0.5,
   ) -> torch.Tensor:
     task = sum(w * func(env, **kw) for func, w, kw in task_terms)
     smp = smp_guidance_reward(env, fixed_timesteps=fixed_timesteps, ws=ws)
-    product = task * smp
+    additive = task_reward_weight * task + smp_reward_weight * smp
     metrics = term.metrics
     if metrics is not None:
-      metrics.record_step(env, task, smp, product, task_terms)
-    return product
+      metrics.record_step(env, task, smp, additive, task_terms)
+    return additive
 
   term.metrics = None  # type: ignore[attr-defined]
-  term.__name__ = "task_smp_product"  # keep console/debug output identical
+  term.__name__ = "task_smp_additive"
   term.command_name = command_name  # type: ignore[attr-defined]
   return term
 

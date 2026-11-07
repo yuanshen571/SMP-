@@ -1,14 +1,8 @@
 #!/usr/bin/env python
-"""Experiment ``0001`` entry point: ``Smp-Location-G1`` / seed 2027 / 10000 iters.
+"""Experiment 0002: G1 Location with 0.5 task + 0.5 SMP rewards.
 
-The upstream project exposes no CLI of its own (``scripts/train.py`` only calls
-``mjlab.scripts.train.main``), so this launcher is the *only* added code path.
-It performs parameter overrides (explicitly allowed by EXECUTION.md §6), sets
-up per-run output directories (§10), stores the untrained checkpoint before
-the first update (§9) and installs the passive metrics layer (§7/§8).
-
-Nothing here changes the learning method, reward formula, sampling, state
-restore hook or randomization.
+Uses the 0001 training/metrics/checkpoint path. Only the configured reward
+composition changes; --no-metrics also retains the additive reward.
 """
 
 from __future__ import annotations
@@ -41,17 +35,17 @@ from mjlab.utils.os import dump_yaml  # noqa: E402
 import importlib.util  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-  "smp_experiment_0001_metrics", Path(__file__).with_name("passive_metrics.py")
+  "smp_experiment_0002_metrics", Path(__file__).with_name("passive_metrics.py")
 )
 assert _spec is not None and _spec.loader is not None
 _metrics_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_metrics_mod)
 PassiveMetrics = _metrics_mod.PassiveMetrics
-build_logged_task_smp_product = _metrics_mod.build_logged_task_smp_product
+build_logged_task_smp_additive = _metrics_mod.build_logged_task_smp_additive
 install_metrics = _metrics_mod.install
 
 TASK_ID = "Smp-Location-G1"
-EXPERIMENT = "0001"
+EXPERIMENT = "0002"
 TZ = ZoneInfo("Asia/Shanghai")
 
 PRIOR = Path("datasets/pretrain_ckpt/pretrained_lafan_run.pt")
@@ -60,7 +54,7 @@ UV_LOCK = Path("uv.lock")
 UV_LOCK_SHA256 = "ce041c7774b1d4abf42e868fa3b4af2973954cec61d35c3b4e58a7e27464d9ce"
 
 METRICS_DEFINITION = """\
-# 0001 metric definitions (TensorBoard namespace `0001/`)
+# 0002 metric definitions (TensorBoard namespace `0002/`)
 
 All values are raw (never smoothed in the writer) and are logged with
 `global_step` = number of completed PPO iterations (1-based, last = 10000).
@@ -73,10 +67,10 @@ extra simulation, resets or forwards.
   `r_task = exp(-0.25 * horizontal_distance_m)` (before `weight`/`dt` scaling).
 - `Reward/smp_raw_mean` — mean of `r_smp = exp(-mean_mse * ws)` from the single
   `smp_guidance_reward()` call per step (`ws = 4` for Location).
-- `Reward/product_raw_mean` — `mean(r_task * r_smp)` over the same samples
-  (product first, then mean — not `mean(task) * mean(smp)`).
+- `Reward/additive_raw_mean` — `mean(0.5*r_task + 0.5*r_smp)` over the
+  same env-step samples. It must equal 0.5*mean(task) + 0.5*mean(smp).
 - `Reward/env_reward_mean` — mean of the reward buffer actually returned to the
-  trainer, i.e. `weight * r_product * step_dt` with `step_dt = 0.02 s`
+  trainer, i.e. `weight * r_additive * step_dt` with `step_dt = 0.02 s`
   (`scale_rewards_by_dt=True`, weight 1.0).
 
 ## Task / motion
@@ -100,7 +94,7 @@ extra simulation, resets or forwards.
 - `Sum/complete_episode_length_steps` — total lasted steps of complete episodes.
 - `Sum/complete_failure_duration_s` — total duration of complete failed episodes.
 - `Sum/complete_task_return_raw` — sum of undiscounted `r_task` returns.
-- `Sum/complete_training_return` — sum of undiscounted `weight*dt*r_product`
+- `Sum/complete_training_return` — sum of undiscounted `weight*dt*r_additive`
   returns (the reward the learner sees).
 
 ## Means (written only when the denominator is non-zero)
@@ -143,7 +137,7 @@ def _now() -> datetime:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description="experiment 0001 launcher")
+  parser = argparse.ArgumentParser(description="experiment 0002 launcher")
   parser.add_argument("--num-envs", type=int, default=1024)
   parser.add_argument("--max-iterations", type=int, default=10000)
   parser.add_argument("--seed", type=int, default=2027)
@@ -181,7 +175,18 @@ def main(argv: list[str] | None = None) -> int:
   agent_cfg.run_name = agent_cfg.run_name or f"seed{args.seed}"
 
   steps_per_env = int(agent_cfg.num_steps_per_env)
-  reward_cfg_before = dataclasses.asdict(env_cfg.rewards["task_smp_product"])
+  # Fail before creating the environment if this branch/config was mixed up.
+  assert set(env_cfg.rewards) == {"task_smp_additive"}
+  reward_term = env_cfg.rewards["task_smp_additive"]
+  rp = reward_term.params
+  assert reward_term.weight == 1.0
+  assert rp["task_reward_weight"] == rp["smp_reward_weight"] == 0.5
+  assert rp["ws"] == 4
+  assert len(rp["task_terms"]) == 1
+  pos_func, pos_weight, pos_kwargs = rp["task_terms"][0]
+  assert pos_func.__name__ == "location_position" and pos_weight == 1.0
+  assert pos_kwargs == {"command_name": "location", "pos_err_scale": 0.25}
+  reward_cfg_before = dataclasses.asdict(reward_term)
 
   # ------------------------------------------------------------- run paths
   stamp = _now()
@@ -206,25 +211,25 @@ def main(argv: list[str] | None = None) -> int:
     sys.exit(f"refusing to overwrite existing run directory: {log_dir}")
   params_dir.mkdir(exist_ok=True)
 
-  print(f"[0001] run_id           = {run_id}")
-  print(f"[0001] log_dir          = {log_dir}")
-  print(f"[0001] ckpt_dir         = {ckpt_dir}")
+  print(f"[0002] run_id           = {run_id}")
+  print(f"[0002] log_dir          = {log_dir}")
+  print(f"[0002] ckpt_dir         = {ckpt_dir}")
   print(
-    f"[0001] num_envs={args.num_envs} steps/env={steps_per_env} "
+    f"[0002] num_envs={args.num_envs} steps/env={steps_per_env} "
     f"iters={args.max_iterations} seed={args.seed} metrics={not args.no_metrics}"
   )
 
   # ------------------------------------------------------- passive metrics
-  term = build_logged_task_smp_product()
+  term = build_logged_task_smp_additive()
   if not args.no_metrics:
-    env_cfg.rewards["task_smp_product"].func = term
-  reward_cfg_after = dataclasses.asdict(env_cfg.rewards["task_smp_product"])
+    env_cfg.rewards["task_smp_additive"].func = term
+  reward_cfg_after = dataclasses.asdict(env_cfg.rewards["task_smp_additive"])
   assert (
     reward_cfg_after["weight"] == reward_cfg_before["weight"]
     and repr(reward_cfg_after["params"]) == repr(reward_cfg_before["params"])
-  ), "reward weight/params must stay identical to upstream"
+  ), "logging must preserve the configured 0002 reward weights/params"
   print(
-    "[0001] reward term: weight=%.3f params=%s"
+    "[0002] reward term: weight=%.3f params=%s"
     % (reward_cfg_after["weight"], reward_cfg_after["params"])
   )
 
@@ -248,6 +253,18 @@ def main(argv: list[str] | None = None) -> int:
     "started_at": stamp.isoformat(),
     "task_id": TASK_ID,
     "experiment": EXPERIMENT,
+    "baseline_commit": "ff8b7f3a90d9b87fa230b5b9777b75ee51cb2d5d",
+    "reward": {
+      "formula": "0.5 * r_task + 0.5 * r_smp",
+      "task_reward_weight": 0.5,
+      "smp_reward_weight": 0.5,
+      "position_weight": 1.0,
+      "velocity_weight": 0.0,
+      "facing_weight": 0.0,
+      "position_kernel": "exp(-0.25 * horizontal_distance_m)",
+      "smp_ws": 4,
+      "reward_manager_weight": 1.0,
+    },
     "log_dir": str(log_dir),
     "ckpt_dir": str(ckpt_dir),
     "num_envs": args.num_envs,
@@ -282,17 +299,17 @@ def main(argv: list[str] | None = None) -> int:
   (log_dir / "run_info.json").write_text(
     json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
   )
-  print(f"[0001] prior sha256     = {prior_sha}")
-  print(f"[0001] uv.lock sha256   = {lock_sha}")
+  print(f"[0002] prior sha256     = {prior_sha}")
+  print(f"[0002] uv.lock sha256   = {lock_sha}")
   print(
-    f"[0001] git              = {run_info['git_commit'][:12]} "
+    f"[0002] git              = {run_info['git_commit'][:12]} "
     f"({run_info['git_branch']})"
   )
 
   # ------------------------------------------------------------------- env
   env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device, render_mode=None)
   print(
-    f"[0001] env created: num_envs={env.num_envs} step_dt={env.step_dt} "
+    f"[0002] env created: num_envs={env.num_envs} step_dt={env.step_dt} "
     f"max_episode_length={env.max_episode_length}"
   )
 
@@ -339,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
   # written through runner.save so it carries iter/common_step_counter and
   # consumes no random numbers.
   save(str(ckpt_dir / "initial_untrained.pt"), {"stage": "initial_untrained"})
-  print(f"[0001] wrote {ckpt_dir / 'initial_untrained.pt'}")
+  print(f"[0002] wrote {ckpt_dir / 'initial_untrained.pt'}")
 
   if metrics is not None:
     metrics.attach(runner)
@@ -361,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
   )
   print(
-    f"[0001] finished: iterations={completed} samples={run_info['total_samples']}"
+    f"[0002] finished: iterations={completed} samples={run_info['total_samples']}"
   )
   return 0
 

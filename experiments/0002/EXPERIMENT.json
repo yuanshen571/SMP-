@@ -1,0 +1,33 @@
+{
+  "experiment": "0002",
+  "branch": "exp0002-location-additive",
+  "baseline_branch": "exp0001-location-baseline",
+  "baseline_commit": "ff8b7f3a90d9b87fa230b5b9777b75ee51cb2d5d",
+  "task": "Smp-Location-G1",
+  "seed": 2027,
+  "num_envs": 1024,
+  "num_steps_per_env": 24,
+  "iterations": 10000,
+  "samples": 245760000,
+  "reward": {
+    "formula": "0.5 * r_task + 0.5 * r_smp",
+    "task_weight": 0.5,
+    "smp_weight": 0.5,
+    "position_weight": 1.0,
+    "velocity_weight": 0.0,
+    "facing_weight": 0.0,
+    "position_kernel": "exp(-0.25 * horizontal_distance_m)",
+    "smp_ws": 4,
+    "fixed_timesteps": [
+      8,
+      15,
+      22
+    ],
+    "manager_weight": 1.0,
+    "scale_rewards_by_dt": true,
+    "step_dt": 0.02
+  },
+  "prior_sha256": "74787104ff124191136eeed2268f79448da3ac2e30e710d42aebfc5a60e58cb3",
+  "uv_lock_sha256": "ce041c7774b1d4abf42e868fa3b4af2973954cec61d35c3b4e58a7e27464d9ce",
+  "runtime_validation": "not run locally; required on L40 before formal training"
+}

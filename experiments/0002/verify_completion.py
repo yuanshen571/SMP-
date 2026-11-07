@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Stage D verification for experiment 0001 and COMPLETION.md generation.
+"""Stage D verification for experiment 0002 and COMPLETION.md generation.
 
-Reads the artefacts written by ``run_0001.py`` (console log, run_info.json,
+Reads the artefacts written by ``run_0002.py`` (console log, run_info.json,
 checkpoint index, TensorBoard events, checkpoints) and checks the completion
-criteria of ``experiments/0001/EXECUTION.md`` §10 D:
+criteria of ``experiments/0002/EXECUTION.md`` §10 D:
 
 * python exit code 0 and the run reported exactly the requested iterations,
 * 10000 iterations / 245_760_000 training samples,
 * every fixed TensorBoard scalar has 10000 unique, self-consistent steps,
 * count identities hold and the conditional means are recomputable from the
   corresponding sums/counts,
-* the final checkpoint loads strictly, differs from ``initial_untrained.pt``
+* the final checkpoint loads, matches the initial state schema, differs from ``initial_untrained.pt``
   (the policy really learned) and the prior file is unchanged,
 * no forbidden per-iteration CSV/JSONL/trajectory/GSI/video/W&B artefacts.
 
@@ -28,12 +28,12 @@ import math
 import sys
 from pathlib import Path
 
-NS = "0001"
+NS = "0002"
 
 FIXED_TAGS = [
   "Reward/task_raw_mean",
   "Reward/smp_raw_mean",
-  "Reward/product_raw_mean",
+  "Reward/additive_raw_mean",
   "Reward/env_reward_mean",
   "Task/target_distance_mean_m",
   "Motion/horizontal_speed_mean_mps",
@@ -183,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     "python exit code == 0", exit_code == 0, f"exit_code={exit_code}"
   )
 
+  tee_ok = exit_file.exists() and "tee_exit_code=0" in exit_file.read_text()
+  report.check("console tee exit code == 0", tee_ok, str(exit_file))
+
   console = log_dir / "console.log"
   finished = console.read_text(errors="replace") if console.exists() else ""
   last_it = last_iteration(console)
@@ -233,6 +236,11 @@ def main(argv: list[str] | None = None) -> int:
       sha256_file(prior) == PRIOR_SHA256,
       sha256_file(prior)[:16],
     )
+
+  lock = Path("uv.lock")
+  expected_lock = "ce041c7774b1d4abf42e868fa3b4af2973954cec61d35c3b4e58a7e27464d9ce"
+  report.check("uv.lock unchanged", lock.is_file() and sha256_file(lock) == expected_lock)
+  report.check("prior exists", prior.is_file(), str(prior))
 
   # ------------------------------------------------------- checkpoints
   index_path = ckpt_dir / "index.json"
@@ -298,6 +306,16 @@ def main(argv: list[str] | None = None) -> int:
       loaded,
       f"keys={sorted(k for k in fin)[:6]}",
     )
+    for component in ("actor_state_dict", "critic_state_dict"):
+      final_state = fin.get(component, {})
+      initial_state = ini.get(component, {})
+      schema_ok = bool(final_state) and final_state.keys() == initial_state.keys()
+      schema_ok = schema_ok and all(
+        final_state[k].shape == initial_state[k].shape for k in final_state)
+      finite_ok = bool(final_state) and all(
+        bool(torch.isfinite(v).all()) for v in final_state.values())
+      report.check(f"{component}: same schema as initial and all tensors finite",
+                   schema_ok and finite_ok, f"{len(final_state)} tensors")
     num_params = sum(v.numel() for v in fin["actor_state_dict"].values())
     # Only the MLP parameters are policy weights; obs_normalizer.count is the
     # transition counter (== total samples) and _mean/_var are running stats.
@@ -350,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
   print(f"[info] optional scalars present: {len(optional_present)}/7")
 
   steps = {t: sorted(scalars[f"{NS}/{t}"]) for t in FIXED_TAGS if f"{NS}/{t}" in scalars}
-  short = {t: (len(v), v[:1] + v[-1:]) for t, v in steps.items() if len(v) != args.iterations}
+  short = {t: (len(v), v[:1] + v[-1:]) for t, v in steps.items() if v != list(range(1, args.iterations + 1))}
   report.check(
     f"each fixed scalar has {args.iterations} unique steps",
     not short,
@@ -419,22 +437,36 @@ def main(argv: list[str] | None = None) -> int:
   )
 
   env_rew = scalars.get(f"{NS}/Reward/env_reward_mean", {})
-  prod = scalars.get(f"{NS}/Reward/product_raw_mean", {})
-  ratios = [
-    env_rew[s] / prod[s] for s in (set(env_rew) & set(prod)) if abs(prod[s]) > 1e-6
-  ]
-  ratio_ok = bool(ratios) and abs(sum(ratios) / len(ratios) - 0.02) < 1e-3
-  report.check(
-    "env reward == 0.02 x r_product (dt scaling)",
-    ratio_ok,
-    f"mean ratio={sum(ratios) / len(ratios):.6f}" if ratios else "missing",
-  )
+  additive = scalars.get(f"{NS}/Reward/additive_raw_mean", {})
+  task_rew = scalars.get(f"{NS}/Reward/task_raw_mean", {})
+  smp_rew = scalars.get(f"{NS}/Reward/smp_raw_mean", {})
+  reward_steps = set(env_rew) & set(additive) & set(task_rew) & set(smp_rew)
+  bad_dt = [s for s in reward_steps if not math.isclose(
+    env_rew[s], 0.02 * additive[s], rel_tol=2e-5, abs_tol=1e-7)]
+  bad_add = [s for s in reward_steps if not math.isclose(
+    additive[s], 0.5 * task_rew[s] + 0.5 * smp_rew[s],
+    rel_tol=2e-5, abs_tol=1e-7)]
+  report.check("env reward == 0.02 x r_additive on every iteration",
+               len(reward_steps) == args.iterations and not bad_dt,
+               f"checked={len(reward_steps)} bad={len(bad_dt)}")
+  report.check("r_additive == 0.5*r_task + 0.5*r_smp on every iteration",
+               len(reward_steps) == args.iterations and not bad_add,
+               f"checked={len(reward_steps)} bad={len(bad_add)}")
+  r = info.get("reward", {})
+  report.check("original SMP outer and Location internal weights recorded",
+               r.get("task_reward_weight") == r.get("smp_reward_weight") == 0.5
+               and r.get("position_weight") == 1.0
+               and r.get("velocity_weight") == r.get("facing_weight") == 0.0
+               and r.get("position_kernel") == "exp(-0.25 * horizontal_distance_m)"
+               and r.get("smp_ws") == 4
+               and r.get("reward_manager_weight") == 1.0,
+               str(r))
 
   finite_bad = 0
   for key in (
     f"{NS}/Reward/task_raw_mean",
     f"{NS}/Reward/smp_raw_mean",
-    f"{NS}/Reward/product_raw_mean",
+    f"{NS}/Reward/additive_raw_mean",
     f"{NS}/Reward/env_reward_mean",
     f"{NS}/Time/iteration_s",
   ):
@@ -482,8 +514,8 @@ def main(argv: list[str] | None = None) -> int:
     trend = [
       ("Reward/task_raw_mean", "任务奖励（原始 r_task）"),
       ("Reward/smp_raw_mean", "SMP 奖励（原始 r_smp）"),
-      ("Reward/product_raw_mean", "乘积奖励 r_product"),
-      ("Reward/env_reward_mean", "环境返回奖励（0.02×r_product）"),
+      ("Reward/additive_raw_mean", "加权和奖励 r_additive"),
+      ("Reward/env_reward_mean", "环境返回奖励（0.02×r_additive）"),
       ("Task/target_distance_mean_m", "目标距离均值 m"),
       ("Episode/complete_length_steps_mean", "完整回合长度（步）"),
       ("Failure/complete_rate", "完整回合失败率"),
@@ -493,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
       for tag, label in trend
     )
 
-    md = f"""# 实验 0001 完成摘要（G1 Location baseline）
+    md = f"""# 实验 0002 完成摘要（G1 Location additive reward）
 
 运行标识：`{info.get('run_id')}`
 生成时间：`{info.get('finished_at', 'n/a')}`（Asia/Shanghai）
@@ -524,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
 - 日志 / TensorBoard：`{log_dir}`
 - 检查点 / 索引：`{ckpt_dir}`
 - 先验：`datasets/pretrain_ckpt/pretrained_lafan_run.pt`（sha256 `{info.get('prior_sha256')}`，未修改）
-- 代码提交：`{info.get('git_commit')}`（分支 `{info.get('git_branch')}`）；启动时工作区包含本实验新增的 `experiments/0001/` 支撑文件（见 `run_info.json` 的 `git_dirty`）
+- 代码提交：`{info.get('git_commit')}`（分支 `{info.get('git_branch')}`）；启动时工作区状态见 `run_info.json` 的 `git_dirty`
 
 ## 验收明细
 
@@ -534,16 +566,16 @@ def main(argv: list[str] | None = None) -> int:
 
 {'全部检查通过（' + str(len(report.rows)) + ' 项）。' if report.failed == 0 else str(report.failed) + ' 项检查未通过，见上表；本文件不伪造 PASS。'}
 
-## 复现命令
+## 运行入口（以下训练命令会新建另一次运行）
 
 ```bash
-cd /root/gpufree-data/smp-g1 && source env.sh && cd repo
-experiments/0001/launch_0001.sh            # 正式训练（阶段 C）
-experiments/0001/accept_0001.py --num-envs 64 --steps 2400 --out logs/_accept/b_stage  # 阶段 B
-experiments/0001/verify_completion.py --log-dir logs/<run> --ckpt-dir ckpt/<run> --out COMPLETION.md
+cd /root/gpufree-data/smp-g1/repo-0002 && source experiments/0002/activate_0002.sh
+experiments/0002/launch_0002.sh            # 正式训练（阶段 C）
+experiments/0002/accept_0002.py --num-envs 64 --steps 2400 --out logs/_accept/b_stage  # 阶段 B
+experiments/0002/verify_completion.py --log-dir logs/<run> --ckpt-dir ckpt/<run> --out COMPLETION.md
 ```
 
-TensorBoard：`127.0.0.1:6009`（`experiments/0001/launch_tensorboard.sh 6009`）。
+TensorBoard：`127.0.0.1:6010`（`experiments/0002/launch_tensorboard.sh 6010`）。
 """
     out.write_text(md, encoding="utf-8")
     print(f"[info] wrote {out}")
