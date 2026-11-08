@@ -50,6 +50,10 @@ def init_smp_state(
   compile_mode: str | None = None,
   physical_filter: bool = False,
   repair_small_joints: bool = False,
+  cluster_code_dir: str = "",
+  cluster_module_dir: str = "",
+  cluster_output_dims: int = 0,
+  cluster_weight_cap: float = 2.0,
 ) -> None:
   """Startup-mode event: load the frozen denoiser, allocate the feature buffer +
   ``DiffNormalizer`` (stashed on the env), and pre-generate the GSI pool of
@@ -108,6 +112,26 @@ def init_smp_state(
       bsz = min(gsi_batch_size, gsi_buffer_size - start)
       pool_chunks.append(_ddpm_sample(env, bsz))
     env._smp_gsi_pool = torch.cat(pool_chunks, dim=0)  # type: ignore[attr-defined]
+
+  if cluster_code_dir or cluster_module_dir:
+    if not (
+      cluster_code_dir
+      and cluster_module_dir
+      and physical_filter
+      and repair_small_joints
+    ):
+      raise ValueError(
+        "cluster sampling requires both paths and unchanged 00031 admission"
+      )
+    from smp.rl.gsi_clusters import initialize as initialize_clusters
+
+    initialize_clusters(
+      env,
+      code_dir=cluster_code_dir,
+      module_dir=cluster_module_dir,
+      output_dims=cluster_output_dims,
+      cap=cluster_weight_cap,
+    )
 
   if compile_model and env.num_envs != gsi_batch_size:
     # Warm the reward-path shape so its Inductor compile happens here.
@@ -238,6 +262,11 @@ def gsi_refresh(
     new_windows = _ddpm_sample(env, num_samples)
   head = int(getattr(env, "_smp_gsi_head", 0))
   end = head + num_samples
+  cluster_plan = None
+  if hasattr(env, "_smp_cluster_module"):
+    from smp.rl.gsi_clusters import prepare_update
+
+    cluster_plan = prepare_update(env, new_windows, head)
   if end <= pool_size:
     pool[head:end] = new_windows
     if hasattr(env, "_smp_physics"):
@@ -252,6 +281,10 @@ def gsi_refresh(
         first:
       ]
   env._smp_gsi_head = end % pool_size  # type: ignore[attr-defined]
+  if cluster_plan is not None:
+    from smp.rl.gsi_clusters import commit
+
+    commit(env, cluster_plan, num_samples)
 
 
 @torch.no_grad()
@@ -266,6 +299,11 @@ def gsi_reset(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> No
     return
 
   pool: torch.Tensor = env._smp_gsi_pool  # type: ignore[attr-defined]
-  idx = torch.randint(0, pool.shape[0], (n,), device=env.device)
+  if hasattr(env, "_smp_cluster_module"):
+    from smp.rl.gsi_clusters import sample_indices
+
+    idx = sample_indices(env, n)
+  else:
+    idx = torch.randint(0, pool.shape[0], (n,), device=env.device)
   window = pool[idx]
   _prime_sim_and_buffer(env, env_ids, window)
