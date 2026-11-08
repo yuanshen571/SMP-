@@ -6,6 +6,7 @@ import argparse
 import importlib.metadata as metadata
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,21 @@ from smp.rl.gsi_clusters import (  # noqa: E402
   sha256,
   validate_artifacts,
 )
+
+
+def check_dependencies(uv_path=None):
+  candidate = Path(uv_path) if uv_path else ROOT.parent / "tools/uv"
+  existing_uv = str(candidate) if candidate.is_file() else shutil.which("uv")
+  if existing_uv:
+    command = [existing_uv, "pip", "check", "--python", sys.executable]
+  elif importlib.util.find_spec("pip") is not None:
+    command = [sys.executable, "-m", "pip", "check"]
+  else:
+    raise RuntimeError(
+      "need the existing uv tool or pip; do not install another environment"
+    )
+  subprocess.run(command, check=True)
+  return command
 
 
 def main():
@@ -89,7 +105,7 @@ def main():
     raise ValueError("shared SDK differs from 00031; stop without reinstalling")
   if not torch.cuda.is_available():
     raise RuntimeError("formal experiments require CUDA")
-  subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
+  dependency_command = check_dependencies()
   modules = []
   code = spec["cluster_sampling"]["code_dir"]
   for dim in (64, 320):
@@ -126,6 +142,7 @@ def main():
     baseline_info=str(args.baseline_info.resolve()),
     baseline_sha256=sha256(args.baseline_info),
     common_initial_sha256=sha256(args.initial_checkpoint),
+    dependency_check=dependency_command,
     modules=modules,
   )
   if args.expected:
