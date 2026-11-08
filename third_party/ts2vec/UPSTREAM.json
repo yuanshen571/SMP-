@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/zhihanyue/ts2vec",
+  "commit": "b0088e14a99706c05451316dc6db8d3da9351163",
+  "license": "MIT; copied source files unmodified",
+  "files": {
+    "ts2vec.py": "2704502598dde115b55559bff8b56563a94eed5cdae4087ec8941a2a077f9972",
+    "utils.py": "85ca67e8e84cad09933d2f3ba60de3bc18bafda78706bd5c4c4a509f577dea90",
+    "LICENSE": "a0cc2d47952871dab9279d53700c02afb7a5b947afb85487d992f3c609486171",
+    "models/__init__.py": "ea9eb54772c0e1bfbdfedf068b36079f44eed61ef09c68cab3b151682a88c2d9",
+    "models/encoder.py": "41ceb3902466686dfb0aa119175761ebceb78dd882de7403b45890b965c2fe94",
+    "models/dilated_conv.py": "9c98e7313e78748670083c400a4ee4d1357a88f1a0457c7f44e780ac4165cdbb",
+    "models/losses.py": "c6f38f66a09b29689ab501062f2851bbd8139eb4bdb40dc73aa4bb0ce3bb2f8c"
+  }
+}

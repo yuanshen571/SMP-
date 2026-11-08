@@ -1,0 +1,15 @@
+{
+  "baseline_commit": "f729a9f45aa6917519bbac43131db6d80fe38b6b",
+  "baseline_files": {
+    "src/smp/rl/events.py": "fe649d34ff7fac0457460b4cc3f6c96ce128a236901c7f4b6fdd8d2bd2dca10d",
+    "src/smp/rl/gsi_physics.py": "b7da8dccb5f0141ba999015d4bceac5fe2b60472fb2ecd2e6986639d41baf4f0",
+    "src/smp/rl/gsi_physics_runtime.py": "b3e9f96d186b1e4bfc87701617aaca7871cb911a0c8c3f1695f2b5f4df22d7ef",
+    "src/smp/rl/utils.py": "a7dbf692bfe2310151b1f0da3e36a9b1b2f66f268cd4b2dac8bdc73173888c3a",
+    "src/smp/pretrain/model.py": "8e7a1f2ce9cf34f80ca176240645355defef5acb41694e7e66214af71a819981",
+    "src/smp/pretrain/scheduler.py": "25357b4db6a23c10d6dd2b8d204503c9128344c15149eea1c75a1f3a5691c89f",
+    "src/smp/rl/env_cfg.py": "7b6138f745991a041bc9d51608165d6db44daa8da9c585febe56aef386819539",
+    "src/smp/rl/tasks/location/location_env_cfg.py": "b6bf88e404ccfa0607fb482e110feb68e04d43affb758e83373d3471354e30ac",
+    "experiments/00031/EXPERIMENT.json": "fb6081929360b8dae46b6b70a8513f27982f8d28fd87fb4443ae719d30b7c290",
+    "uv.lock": "ce041c7774b1d4abf42e868fa3b4af2973954cec61d35c3b4e58a7e27464d9ce"
+  }
+}
