@@ -53,7 +53,7 @@ run_logged() {
   "$@" 2>&1 | tee "${folder}/console.log"
   local statuses=("${PIPESTATUS[@]}")
   set -e
-  printf 'process_exit_code=%s\ntee_exit_code=%s\n' "${statuses[0]}" "${statuses[1]}" > "${folder}/exit_code.txt"
+  printf 'python_exit_code=%s\ntee_exit_code=%s\n' "${statuses[0]}" "${statuses[1]}" > "${folder}/exit_code.txt"
   if [[ "${statuses[0]}" != 0 ]]; then return "${statuses[0]}"; fi
   if [[ "${statuses[1]}" != 0 ]]; then return "${statuses[1]}"; fi
 }
