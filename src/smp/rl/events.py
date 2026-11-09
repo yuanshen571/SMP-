@@ -265,6 +265,13 @@ def gsi_reset(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> No
   if n == 0:
     return
 
+  mixed = getattr(env, "_smp_mixed_cache", None)
+  if mixed is not None:
+    if mixed.active:
+      mixed.reset(env_ids, _prime_sim_and_buffer)
+      return
+    mixed.count_gsi(n)
+
   pool: torch.Tensor = env._smp_gsi_pool  # type: ignore[attr-defined]
   idx = torch.randint(0, pool.shape[0], (n,), device=env.device)
   window = pool[idx]
