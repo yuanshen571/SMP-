@@ -32,8 +32,16 @@ def read_json(path):
   return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def validate_artifacts(code_dir, module_dir, output_dims):
+def validate_cap(cap):
+  cap = float(cap)
+  if not np.isfinite(cap) or cap < 1.0:
+    raise ValueError("sampling cap must be finite and at least 1")
+  return cap
+
+
+def validate_artifacts(code_dir, module_dir, output_dims, *, cap=2.0):
   """Read-only validation. A moved bundle needs no original full training data."""
+  cap = validate_cap(cap)
   code_dir, module_dir = Path(code_dir).resolve(), Path(module_dir).resolve()
   if output_dims not in (64, 320):
     raise ValueError("expected a 64D or 320D G1 module")
@@ -115,7 +123,7 @@ def validate_artifacts(code_dir, module_dir, output_dims):
     output_dims=output_dims,
     input_shape=[10, 59],
     clusters=16,
-    cap=2.0,
+    cap=cap,
     dataset_sha256=bundle["dataset_sha256"],
     normalizer_sha256=files["normalizer.npz"],
     files=files,
@@ -179,8 +187,8 @@ def representation_digest(module):
   return h.hexdigest()
 
 
-def load_module(code_dir, module_dir, output_dims, device):
-  manifest = validate_artifacts(code_dir, module_dir, output_dims)
+def load_module(code_dir, module_dir, output_dims, device, *, cap=2.0):
+  manifest = validate_artifacts(code_dir, module_dir, output_dims, cap=cap)
   code = Path(manifest["code_dir"])
   sys.path.insert(0, str(code)) if str(code) not in sys.path else None
   importlib.invalidate_caches()
@@ -200,11 +208,12 @@ def load_module(code_dir, module_dir, output_dims, device):
 
 def pool_distribution(labels, cap=2.0):
   """Per-state weights; cluster mass is n_k*w_k, not just w_k."""
+  cap = validate_cap(cap)
   labels = np.asarray(labels)
   if labels.ndim != 1 or labels.dtype.kind not in "iu" or not len(labels):
     raise ValueError("need nonempty integer current-pool labels")
-  if labels.min() < 0 or labels.max() >= 16 or cap != 2.0:
-    raise ValueError("0004/00041 require 16 clusters and cap=2")
+  if labels.min() < 0 or labels.max() >= 16:
+    raise ValueError("cluster labels must be in 0..15")
   counts = np.bincount(labels, minlength=16)
   weights = np.zeros(16, dtype=np.float64)
   nonempty = counts > 0
@@ -237,7 +246,9 @@ def classify(env, windows):
 
 
 def _plan(env, labels):
-  distribution = pool_distribution(labels)
+  distribution = pool_distribution(
+    labels, cap=env._smp_cluster_manifest.get("cap", 2.0)
+  )
   return dict(
     labels=torch.as_tensor(labels.copy(), device=env.device, dtype=torch.long),
     probability=torch.as_tensor(
@@ -250,10 +261,8 @@ def _plan(env, labels):
 
 
 def initialize(env, *, code_dir, module_dir, output_dims, cap):
-  if cap != 2.0:
-    raise ValueError("fixed sampling cap is 2")
   env._smp_cluster_module, env._smp_cluster_manifest = load_module(
-    code_dir, module_dir, output_dims, env.device
+    code_dir, module_dir, output_dims, env.device, cap=cap
   )
   env._smp_cluster_stats = dict(
     classification_updates=0, classified_windows=0, reset_calls=0, reset_draws=0
@@ -300,7 +309,7 @@ def sample_indices(env, count):
 def summary(env):
   return dict(
     **env._smp_cluster_stats,
-    cap=2.0,
+    cap=env._smp_cluster_manifest.get("cap", 2.0),
     counts=list(env._smp_cluster_counts),
     weights=list(env._smp_cluster_weights),
     mass=list(env._smp_cluster_mass),
