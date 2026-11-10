@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Source in the one existing server repo. Reuse the one existing venv.
+# Reuse the one existing server environment; never create or install another.
 SMP_0005_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SMP_0005_ROOT="$(dirname "${SMP_0005_REPO}")"
 if [[ ! -f "${SMP_0005_ROOT}/env.sh" || ! -x "${SMP_0005_ROOT}/venv/bin/python" ]]; then
-  printf 'existing shared env.sh and venv are required; do not create another environment\n' >&2
+  printf 'existing shared env.sh and venv required\n' >&2
   return 2 2>/dev/null || exit 2
 fi
 source "${SMP_0005_ROOT}/env.sh"

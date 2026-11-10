@@ -260,15 +260,6 @@ class PassiveMetrics:
     add(f"{NS}/Progress/training_samples", self.total_samples, step)
     add(f"{NS}/Time/iteration_s", iteration_time, step)
     add(f"{NS}/Time/training_elapsed_s", self.elapsed, step)
-    if hasattr(self.env, "_smp_mixed_cache"):
-      cache = self.env._smp_mixed_cache
-      for name, value in cache.stats.items():
-        add(f"{NS}/Mixed/{name}", value, step)
-      add(f"{NS}/Mixed/active", int(cache.active), step)
-      add(f"{NS}/Mixed/size", 0 if cache.pool is None else len(cache.pool), step)
-      add(f"{NS}/Mixed/policy_probability", cache.config.policy_probability, step)
-    for name, value in getattr(self.env, "_smp_physics_totals", {}).items():
-      add(f"{NS}/GSI/{name}", value, step)
 
     if complete > 0:
       add(f"{NS}/Episode/complete_task_return_raw_mean", sum_task_ret / complete, step)

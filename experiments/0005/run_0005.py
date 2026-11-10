@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-"""G1 Location: 00031 plus delayed lifetime-selected real rollout resets."""
+"""Experiment 0005: G1 Location with 0.5 task + 0.5 SMP rewards.
+
+Uses the 0001 training/metrics/checkpoint path. Only the configured reward
+composition changes; --no-metrics also retains the additive reward.
+"""
 
 from __future__ import annotations
 
@@ -30,8 +34,6 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg  # noqa: E402
 from mjlab.utils.os import dump_yaml  # noqa: E402
 
 import smp.rl.tasks  # noqa: E402,F401  (registers Smp-Location-G1)
-from smp.rl.mixed_cache import config_from_spec  # noqa: E402
-from smp.rl.mixed_cache import install as install_mixed  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
   "smp_experiment_0005_metrics", Path(__file__).with_name("passive_metrics.py")
@@ -43,13 +45,10 @@ PassiveMetrics = _metrics_mod.PassiveMetrics
 build_logged_task_smp_additive = _metrics_mod.build_logged_task_smp_additive
 install_metrics = _metrics_mod.install
 
+from initialization import assert_untrained, initial_models_digest  # noqa: E402
+
 TASK_ID = "Smp-Location-G1"
 EXPERIMENT = "0005"
-EXPERIMENT_CONFIG = json.loads(
-  Path(__file__).with_name("EXPERIMENT.json").read_text(encoding="utf-8")
-)
-REPAIR_SMALL_JOINTS = EXPERIMENT_CONFIG["physical_filter"]["repair_small_joints"]
-MIXED = EXPERIMENT_CONFIG["mixed_cache"]
 TZ = ZoneInfo("Asia/Shanghai")
 
 PRIOR = Path("datasets/pretrain_ckpt/pretrained_lafan_run.pt")
@@ -116,19 +115,6 @@ extra simulation, resets or forwards.
   245760000 at iteration 10000 with 1024 envs).
 - `Time/iteration_s` — collection + learning wall time of this iteration.
 - `Time/training_elapsed_s` — accumulated `iteration_s`.
-
-
-## Mixed initialization
-- `Mixed/active` / `size` — initial admission completes at iteration 1500;
-  policy-source resets start only in subsequent natural resets.
-- `Mixed/transactions` / `inserted` — final 35 / 8208.
-- `Mixed/gsi_reset_draws` includes all tracked GSI resets;
-  `mixed_gsi_reset_draws` includes only GSI draws after mixture activation.
-- `Mixed/policy_reset_draws` / `first_policy_iteration` /
-  `pre_activation_policy_draws` — actual policy-source usage and timing.
-- `Mixed/policy_probability` — fixed 0.1; it is not the realized batch fraction.
-- Admission is based on complete-episode lifetime, not reward thresholds.
-  `mixed_cache_audit.json` window counts/sums must match the Count/Sum tags.
 """
 
 
@@ -153,54 +139,12 @@ def _now() -> datetime:
   return datetime.now(TZ)
 
 
-def initial_models_digest(payload):
-  digest = hashlib.sha256()
-  for component in ("actor_state_dict", "critic_state_dict"):
-    for name, tensor in sorted(payload[component].items()):
-      value = tensor.detach().cpu().contiguous()
-      digest.update(f"{component}:{name}:{value.dtype}:{tuple(value.shape)}".encode())
-      digest.update(value.numpy().tobytes())
-  return digest.hexdigest()
-
-
-def load_common_initial(runner, path):
-  payload = torch.load(path, map_location="cpu", weights_only=False)
-  assert path.name == "initial_untrained.pt", "use the 0002 untrained checkpoint"
-  assert payload.get("infos", {}).get("stage") == "initial_untrained"
-  assert not payload["optimizer_state_dict"]["state"], (
-    "common source has optimizer updates"
-  )
-  for component in ("actor_state_dict", "critic_state_dict"):
-    assert all(bool(torch.isfinite(v).all()) for v in payload[component].values())
-    assert int(payload[component]["obs_normalizer.count"].item()) == 0
-  runner.alg.load(
-    payload,
-    {"actor": True, "critic": True, "optimizer": False, "iteration": False},
-    strict=True,
-  )
-  assert runner.current_learning_iteration == 0 and not runner.alg.optimizer.state
-  assert initial_models_digest(runner.alg.save()) == initial_models_digest(payload)
-  return initial_models_digest(payload)
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="experiment 0005 launcher")
   parser.add_argument("--num-envs", type=int, default=1024)
   parser.add_argument("--max-iterations", type=int, default=10000)
-  parser.add_argument("--seed", type=int, default=2027)
+  parser.add_argument("--seed", type=int, default=2028)
   parser.add_argument("--device", type=str, default="cuda:0")
-  parser.add_argument(
-    "--baseline-info",
-    type=Path,
-    required=True,
-    help="actual completed 00031 run_info.json",
-  )
-  parser.add_argument(
-    "--initial-checkpoint",
-    type=Path,
-    required=True,
-    help="common initial_untrained.pt from 0002; models only, fresh optimizer",
-  )
   parser.add_argument(
     "--log-root", type=str, default=str(Path("logs").resolve()), help="run logs root"
   )
@@ -218,17 +162,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
-  if not args.initial_checkpoint.is_file():
-    raise FileNotFoundError(args.initial_checkpoint)
-  baseline = json.loads(args.baseline_info.read_text(encoding="utf-8"))
-  assert baseline["experiment"] == "00031" and baseline["completed_iterations"] == 10000
-  assert _sha256(args.initial_checkpoint) == baseline["initial_checkpoint_sha256"]
+  assert args.seed == 2028, "this experiment is fixed to seed 2028"
+  from contract import check_files
+
+  check_files(quiet=True)
 
   env_cfg = load_env_cfg(TASK_ID, play=False)
   agent_cfg = load_rl_cfg(TASK_ID)
-  env_cfg.events["init_smp_state"].params.update(
-    physical_filter=True, repair_small_joints=REPAIR_SMALL_JOINTS
-  )
 
   # ---------------------------------------------------------- overrides §6
   env_cfg.scene.num_envs = args.num_envs
@@ -321,23 +261,14 @@ def main(argv: list[str] | None = None) -> int:
     "started_at": stamp.isoformat(),
     "task_id": TASK_ID,
     "experiment": EXPERIMENT,
-    "baseline_commit": "f729a9f45aa6917519bbac43131db6d80fe38b6b",
-    "baseline_info": str(args.baseline_info.resolve()),
-    "baseline_info_sha256": _sha256(args.baseline_info),
-    "mixed_cache": MIXED,
-    "initial_checkpoint": str(args.initial_checkpoint.resolve()),
-    "initial_checkpoint_sha256": _sha256(args.initial_checkpoint),
-    "gsi_physics": {
-      "repair_small_joints": REPAIR_SMALL_JOINTS,
-      "ground_limit_mm": 19.72,
-      "ground_frames": 10,
-      "self_frames": 10,
-      "self_geom_pairs": 469,
-      "self_tolerance_mm": 0,
-      "joint_frames": 10,
-      "joint_tolerance_rad": 1e-5,
-      "repair_limit_deg": 1.0,
-    },
+    "repeats_experiment": "0002",
+    "initialization_seed": 2028,
+    "initialization_mode": "fresh_seed",
+    "baseline_files_verified": True,
+    "physical_filter_enabled": False,
+    "mixed_cache_enabled": False,
+    "clustering_enabled": False,
+    "baseline_commit": "0a4ceff351b1f4885b61b6bfddee80ec49cb1874",
     "reward": {
       "formula": "0.5 * r_task + 0.5 * r_smp",
       "task_reward_weight": 0.5,
@@ -392,17 +323,6 @@ def main(argv: list[str] | None = None) -> int:
 
   # ------------------------------------------------------------------- env
   env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device, render_mode=None)
-  actual_physics = dataclasses.asdict(env._smp_physics.config)
-  assert actual_physics["repair"] == REPAIR_SMALL_JOINTS
-  assert actual_physics["ground_limit_mm"] == 19.72
-  assert actual_physics["joint_tolerance_rad"] == 1e-5
-  assert actual_physics["repair_limit_deg"] == 1.0
-  assert abs(actual_physics["control_dt"] - 0.02) < 1e-12
-  assert actual_physics == baseline["gsi_physics_config"]
-  assert (
-    json.loads(json.dumps(env._smp_physics.manifest)) == baseline["gsi_model_manifest"]
-  )
-  run_info["gsi_physics_config"] = actual_physics
   print(
     f"[0005] env created: num_envs={env.num_envs} step_dt={env.step_dt} "
     f"max_episode_length={env.max_episode_length}"
@@ -416,22 +336,9 @@ def main(argv: list[str] | None = None) -> int:
 
   wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
   runner = MjlabOnPolicyRunner(wrapped, agent_dict, str(log_dir), device=args.device)
-  run_info["initial_models_sha256"] = load_common_initial(
-    runner, args.initial_checkpoint
-  )
-  assert run_info["initial_models_sha256"] == baseline["initial_models_sha256"]
-  mixed = install_mixed(
-    env,
-    config=config_from_spec(MIXED),
-    steps_per_iteration=steps_per_env,
-    audit_path=log_dir / "mixed_cache_audit.json",
-  )
-  run_info["gsi_model_manifest"] = env._smp_physics.manifest
-  run_info["gsi_physics_totals"] = dict(env._smp_physics_totals)
-  run_info["mixed_cache_summary"] = mixed.summary()
-  (log_dir / "run_info.json").write_text(
-    json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-  )
+  assert not hasattr(env, "_smp_physics"), "0005 must have no physical filter"
+  assert_untrained(runner.alg.save())
+  run_info["initial_models_sha256"] = initial_models_digest(runner.alg.save())
   runner.add_git_repo_to_log(__file__)
 
   # ------------------------------------------------ checkpoint redirection
@@ -443,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     target = ckpt_dir / Path(path).name
     payload = dict(infos or {})
     payload.setdefault("run_id", run_id)
+    payload.setdefault("experiment", EXPERIMENT)
+    payload.setdefault("initialization_seed", 2028)
     original_save(str(target), payload)
     initial = target.name == "initial_untrained.pt"
     iteration = int(runner.current_learning_iteration)
@@ -468,6 +377,12 @@ def main(argv: list[str] | None = None) -> int:
   # consumes no random numbers.
   save(str(ckpt_dir / "initial_untrained.pt"), {"stage": "initial_untrained"})
   print(f"[0005] wrote {ckpt_dir / 'initial_untrained.pt'}")
+  run_info["saved_initial_checkpoint_sha256"] = _sha256(
+    ckpt_dir / "initial_untrained.pt"
+  )
+  (log_dir / "run_info.json").write_text(
+    json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+  )
 
   if metrics is not None:
     metrics.attach(runner)
@@ -485,8 +400,6 @@ def main(argv: list[str] | None = None) -> int:
   run_info["finished_at"] = _now().isoformat()
   run_info["completed_iterations"] = completed
   run_info["total_samples"] = completed * steps_per_env * int(args.num_envs)
-  run_info["gsi_physics_totals"] = dict(env._smp_physics_totals)
-  run_info["mixed_cache_summary"] = mixed.summary()
   (log_dir / "run_info.json").write_text(
     json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
   )

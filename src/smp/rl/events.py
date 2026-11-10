@@ -48,8 +48,6 @@ def init_smp_state(
   gsi_batch_size: int = 256,
   compile_model: bool = True,
   compile_mode: str | None = None,
-  physical_filter: bool = False,
-  repair_small_joints: bool = False,
 ) -> None:
   """Startup-mode event: load the frozen denoiser, allocate the feature buffer +
   ``DiffNormalizer`` (stashed on the env), and pre-generate the GSI pool of
@@ -94,20 +92,11 @@ def init_smp_state(
   if gsi_buffer_size <= 0:
     msg = f"gsi_buffer_size must be positive, got {gsi_buffer_size}."
     raise ValueError(msg)
-  if repair_small_joints and not physical_filter:
-    raise ValueError("joint correction requires the physical filter")
-  if physical_filter:
-    from smp.rl.gsi_physics_runtime import collect, initialize
-
-    initialize(env, repair=repair_small_joints, batch_size=gsi_batch_size)
-    env._smp_gsi_pool = collect(env, gsi_buffer_size, _ddpm_sample)
-    env._smp_gsi_repaired_rows = env._smp_physics_last_repaired.clone()
-  else:
-    pool_chunks: list[torch.Tensor] = []
-    for start in range(0, gsi_buffer_size, gsi_batch_size):
-      bsz = min(gsi_batch_size, gsi_buffer_size - start)
-      pool_chunks.append(_ddpm_sample(env, bsz))
-    env._smp_gsi_pool = torch.cat(pool_chunks, dim=0)  # type: ignore[attr-defined]
+  pool_chunks: list[torch.Tensor] = []
+  for start in range(0, gsi_buffer_size, gsi_batch_size):
+    bsz = min(gsi_batch_size, gsi_buffer_size - start)
+    pool_chunks.append(_ddpm_sample(env, bsz))
+  env._smp_gsi_pool = torch.cat(pool_chunks, dim=0)  # type: ignore[attr-defined]
 
   if compile_model and env.num_envs != gsi_batch_size:
     # Warm the reward-path shape so its Inductor compile happens here.
@@ -230,27 +219,15 @@ def gsi_refresh(
     msg = f"num_samples ({num_samples}) cannot exceed pool size ({pool_size})"
     raise ValueError(msg)
 
-  if hasattr(env, "_smp_physics"):
-    from smp.rl.gsi_physics_runtime import collect
-
-    new_windows = collect(env, num_samples, _ddpm_sample)
-  else:
-    new_windows = _ddpm_sample(env, num_samples)
+  new_windows = _ddpm_sample(env, num_samples)
   head = int(getattr(env, "_smp_gsi_head", 0))
   end = head + num_samples
   if end <= pool_size:
     pool[head:end] = new_windows
-    if hasattr(env, "_smp_physics"):
-      env._smp_gsi_repaired_rows[head:end] = env._smp_physics_last_repaired
   else:
     first = pool_size - head
     pool[head:] = new_windows[:first]
     pool[: end - pool_size] = new_windows[first:]
-    if hasattr(env, "_smp_physics"):
-      env._smp_gsi_repaired_rows[head:] = env._smp_physics_last_repaired[:first]
-      env._smp_gsi_repaired_rows[: end - pool_size] = env._smp_physics_last_repaired[
-        first:
-      ]
   env._smp_gsi_head = end % pool_size  # type: ignore[attr-defined]
 
 
@@ -264,13 +241,6 @@ def gsi_reset(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> No
   n = int(env_ids.numel())
   if n == 0:
     return
-
-  mixed = getattr(env, "_smp_mixed_cache", None)
-  if mixed is not None:
-    if mixed.active:
-      mixed.reset(env_ids, _prime_sim_and_buffer)
-      return
-    mixed.count_gsi(n)
 
   pool: torch.Tensor = env._smp_gsi_pool  # type: ignore[attr-defined]
   idx = torch.randint(0, pool.shape[0], (n,), device=env.device)

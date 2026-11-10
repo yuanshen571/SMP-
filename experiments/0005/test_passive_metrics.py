@@ -61,13 +61,6 @@ def make_env(n: int = 16) -> SimpleNamespace:
 
 def test_rng_neutral() -> None:
   env = make_env()
-  env._smp_physics_totals = {"generated": 5120, "inserted": 4096, "repair_inserted": 0}
-  env._smp_mixed_cache = SimpleNamespace(
-    stats={"transactions": 1, "inserted": 456, "policy_reset_draws": 123},
-    active=True,
-    pool=torch.zeros(456, 10, 86),
-    config=SimpleNamespace(policy_probability=0.1),
-  )
   metrics = pm.PassiveMetrics(env, steps_per_env=24)
   writer = _Writer()
   task_terms = (
@@ -86,12 +79,6 @@ def test_rng_neutral() -> None:
     metrics.record_env_reward(additive * 0.02)
   metrics.on_reset_idx(env, None)
   metrics.on_iteration(writer, 0, 0.1, 0.05)
-  for name, value in env._smp_physics_totals.items():
-    assert writer.scalars[f"0005/GSI/{name}"] == [(float(value), 1)]
-  assert writer.scalars["0005/Mixed/active"] == [(1.0, 1)]
-  assert writer.scalars["0005/Mixed/size"] == [(456.0, 1)]
-  assert writer.scalars["0005/Mixed/policy_probability"] == [(0.1, 1)]
-  assert writer.scalars["0005/Mixed/policy_reset_draws"] == [(123.0, 1)]
   assert torch.equal(torch.randn(8), control), "logging path consumed RNG"
   print(f"PASS rng-neutral (wrote {len(writer.scalars)} tags)")
 

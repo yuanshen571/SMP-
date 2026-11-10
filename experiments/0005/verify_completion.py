@@ -154,141 +154,6 @@ def check_artifacts(root: Path) -> list[str]:
   return bad
 
 
-def check_mixed(info, spec, scalars, log_dir, iterations, num_envs, steps, report):
-  import sys
-
-  import numpy as np
-
-  sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-  from check_mixed_audit import verify_audit
-
-  from smp.rl.mixed_cache import config_from_spec
-
-  cfg = config_from_spec(spec["mixed_cache"])
-  summary = info.get("mixed_cache_summary", {})
-  active = iterations >= cfg.activate_after_iteration
-  count = (
-    0
-    if not active
-    else 1 + (iterations - cfg.activate_after_iteration) // cfg.update_interval
-  )
-  inserted = 0 if not active else cfg.capacity + (count - 1) * cfg.replace_count
-  report.check(
-    "mixed cache configuration matches fixed 0005 protocol",
-    info.get("mixed_cache") == spec["mixed_cache"]
-    and cfg.capacity == 456
-    and cfg.replace_count == 228
-    and cfg.policy_probability == 0.1
-    and cfg.collect_after_iteration == 1000
-    and cfg.activate_after_iteration == 1500
-    and cfg.update_interval == 250
-    and cfg.future_steps == 50,
-  )
-  path = log_dir / "mixed_cache_audit.json"
-  audit = json.loads(path.read_text()) if path.exists() else {"transactions": []}
-  try:
-    verified = verify_audit(
-      audit, cfg, iterations, steps_per_iteration=steps, num_envs=num_envs
-    )
-    ok = verified["transactions"] == count and verified["inserted"] == inserted
-    ok &= summary.get("pool_payload_sha256") == verified["last_payload_sha256"]
-    report.check(
-      "all lifetime means, real-frame provenance, 50-step qualification and FIFO audits",
-      ok,
-    )
-  except Exception as exc:
-    report.check(
-      "all lifetime means, real-frame provenance, 50-step qualification and FIFO audits",
-      False,
-      repr(exc),
-    )
-  report.check(
-    "mixed cache fixed quotas and activation boundary",
-    summary.get("transactions") == count
-    and summary.get("inserted") == inserted
-    and summary.get("active") == active
-    and summary.get("size") == (456 if active else 0)
-    and summary.get("pre_activation_policy_draws") == 0,
-  )
-  if iterations > cfg.activate_after_iteration:
-    policy = summary.get("policy_reset_draws", 0)
-    gsi = summary.get("mixed_gsi_reset_draws", 0)
-    first = summary.get("first_policy_iteration", 0)
-    probability_ok = policy > 0 and gsi > 0 and first >= 1501
-    if policy + gsi:
-      probability_ok &= abs(policy / (policy + gsi) - 0.1) <= max(
-        0.02, 6 * math.sqrt(0.09 / (policy + gsi))
-      )
-    report.check(
-      "actual 90/10 reset source selection starts after iteration 1500", probability_ok
-    )
-  else:
-    report.check(
-      "no premature policy resets",
-      summary.get("policy_reset_draws") == 0
-      and summary.get("first_policy_iteration") == 0,
-    )
-  tags_ok = True
-  for name, value in summary.items():
-    if name in (
-      "next_half",
-      "history_bytes",
-      "last_update_iteration",
-      "pool_payload_sha256",
-    ):
-      continue
-    series = scalars.get(f"{NS}/Mixed/{name}", {})
-    tags_ok &= sorted(series) == list(range(1, iterations + 1))
-    tags_ok &= all(math.isfinite(v) for v in series.values())
-    # TensorBoard stores add_scalar in float32, including large byte counters.
-    tags_ok &= series.get(iterations) == float(np.float32(value))
-    if name == "policy_reset_draws":
-      tags_ok &= all(v == 0 for i, v in series.items() if i <= 1500)
-    if name == "active":
-      tags_ok &= all(v == int(i >= 1500) for i, v in series.items())
-    if name == "policy_probability":
-      tags_ok &= all(v == float(np.float32(0.1)) for v in series.values())
-  report.check(
-    "all mixed TensorBoard counters complete and reconcile with metadata", tags_ok
-  )
-  means_ok = True
-  complete = scalars.get(f"{NS}/Count/complete_episode", {})
-  lengths = scalars.get(f"{NS}/Sum/complete_episode_length_steps", {})
-  for row in audit.get("transactions", []):
-    first = (row["collection_start_step"] - 1) // steps + 1
-    last = row["collection_end_step"] // steps
-    means_ok &= all(i in complete and i in lengths for i in range(first, last + 1))
-    means_ok &= (
-      sum(complete.get(i, 0) for i in range(first, last + 1))
-      == row["complete_episodes"]
-    )
-    means_ok &= (
-      sum(lengths.get(i, 0) for i in range(first, last + 1))
-      == row["sum_complete_episode_steps"]
-    )
-  report.check(
-    "collection window episode-weighted means exactly match training sums/counts",
-    means_ok,
-  )
-  baseline_path = Path(info.get("baseline_info", "missing"))
-  baseline_ok = baseline_path.is_file() and sha256_file(baseline_path) == info.get(
-    "baseline_info_sha256"
-  )
-  if baseline_ok:
-    baseline = json.loads(baseline_path.read_text())
-    baseline_ok &= (
-      baseline["experiment"] == "00031" and baseline["completed_iterations"] == 10000
-    )
-    baseline_ok &= baseline["initial_models_sha256"] == info.get(
-      "initial_models_sha256"
-    )
-    baseline_ok &= baseline["gsi_model_manifest"] == info.get("gsi_model_manifest")
-    baseline_ok &= baseline["gsi_physics_config"] == info.get("gsi_physics_config")
-  report.check(
-    "same initial models and physical model as actual completed 00031", baseline_ok
-  )
-
-
 def main(argv: list[str] | None = None) -> int:
   parser = argparse.ArgumentParser()
   parser.add_argument("--log-dir", required=True)
@@ -329,47 +194,27 @@ def main(argv: list[str] | None = None) -> int:
   )
 
   info = json.loads((log_dir / "run_info.json").read_text())
-  physics = info.get("gsi_physics", {})
-  totals = info.get("gsi_physics_totals", {})
-  spec = json.loads(
-    Path(__file__).with_name("EXPERIMENT.json").read_text(encoding="utf-8")
-  )
-  expected_updates = 1 + (args.iterations * args.steps_per_env) // 2400
-  expected_insertions = 4096 + (expected_updates - 1) * 1024
   report.check(
-    "full ten-frame physics configuration",
-    physics.get("ground_limit_mm") == 19.72
-    and physics.get("ground_frames")
-    == physics.get("joint_frames")
-    == physics.get("self_frames")
-    == 10
-    and physics.get("self_geom_pairs") == 469
-    and physics.get("self_tolerance_mm") == 0
-    and physics.get("joint_tolerance_rad") == 1e-5
-    and physics.get("repair_small_joints")
-    == spec["physical_filter"]["repair_small_joints"],
+    "correct seed-repeat experiment identity",
+    info.get("experiment") == "0005" and info.get("repeats_experiment") == "0002",
   )
   report.check(
-    "fixed GSI quotas and refresh count",
-    totals.get("updates") == expected_updates
-    and totals.get("inserted") == expected_insertions,
-    str(totals),
+    "unchanged method switches",
+    info.get("physical_filter_enabled") is False
+    and info.get("mixed_cache_enabled") is False
+    and info.get("clustering_enabled") is False
+    and info.get("baseline_files_verified") is True,
   )
   report.check(
-    "qualified insertion accounting",
-    totals.get("qualified", -1) == totals.get("inserted", 0) + totals.get("surplus", 0)
-    and totals.get("generated", -1) >= totals.get("qualified", 0),
+    "seed-2028 initialization recorded",
+    info.get("initialization_seed") == 2028
+    and info.get("initialization_mode") == "fresh_seed",
   )
+  saved_initial = ckpt_dir / "initial_untrained.pt"
   report.check(
-    "00031 joint correction remains enabled for GSI",
-    totals.get("repair_inserted", 0) > 0
-    if spec["physical_filter"]["repair_small_joints"]
-    else totals.get("repair_attempted", -1) == 0,
-  )
-  common = Path(info.get("initial_checkpoint", "missing"))
-  report.check(
-    "common initial source preserved",
-    common.is_file() and sha256_file(common) == info.get("initial_checkpoint_sha256"),
+    "saved initial checkpoint fingerprint",
+    saved_initial.is_file()
+    and sha256_file(saved_initial) == info.get("saved_initial_checkpoint_sha256"),
   )
   report.check(
     "run_info completed_iterations",
@@ -382,10 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     f"{info.get('total_samples')}",
   )
   report.check(
-    "run_info fixed parameters (1024 envs / 24 steps / seed 2027)",
+    "run_info fixed parameters (1024 envs / 24 steps / seed 2028)",
     info.get("num_envs") == args.num_envs
     and info.get("num_steps_per_env") == args.steps_per_env
-    and info.get("seed") == 2027,
+    and info.get("seed") == 2028,
     f"{info.get('num_envs')}/{info.get('num_steps_per_env')}/{info.get('seed')}",
   )
   report.check(
@@ -478,21 +323,14 @@ def main(argv: list[str] | None = None) -> int:
   if final_ckpt.exists() and initial_ckpt.exists():
     fin = torch.load(final_ckpt, map_location="cpu", weights_only=False)
     ini = torch.load(initial_ckpt, map_location="cpu", weights_only=False)
-    from importlib.util import module_from_spec, spec_from_file_location
+    from initialization import assert_untrained, initial_models_digest
 
-    run_spec = spec_from_file_location(
-      "experiment_runner", Path(__file__).with_name(f"run_{NS}.py")
-    )
-    run_mod = module_from_spec(run_spec)
-    run_spec.loader.exec_module(run_mod)
-    common_state = torch.load(common, map_location="cpu", weights_only=False)
-    report.check(
-      "initial model tensors exactly match common untrained source",
-      run_mod.initial_models_digest(ini)
-      == run_mod.initial_models_digest(common_state)
-      == info.get("initial_models_sha256"),
-    )
-    report.check("initial optimizer is fresh", not ini["optimizer_state_dict"]["state"])
+    try:
+      assert_untrained(ini, require_provenance=True)
+      initial_ok = initial_models_digest(ini) == info.get("initial_models_sha256")
+    except (AssertionError, KeyError):
+      initial_ok = False
+    report.check("fresh seed-2028 baseline initialization", initial_ok)
     keys_ok = all(k in fin for k in ("actor_state_dict", "critic_state_dict", "iter"))
     loaded = bool(keys_ok)
     report.check(
@@ -565,37 +403,6 @@ def main(argv: list[str] | None = None) -> int:
   )
   optional_present = [t for t in OPTIONAL_TAGS if t in tags]
   print(f"[info] optional scalars present: {len(optional_present)}/7")
-  check_mixed(
-    info,
-    spec,
-    scalars,
-    log_dir,
-    args.iterations,
-    args.num_envs,
-    args.steps_per_env,
-    report,
-  )
-  gsi_tags_ok = True
-  for name in (
-    "updates",
-    "generated",
-    "qualified",
-    "inserted",
-    "surplus",
-    "repair_attempted",
-    "repair_inserted",
-  ):
-    values = scalars.get(f"{NS}/GSI/{name}", {})
-    expected_steps = list(range(1, args.iterations + 1))
-    ordered = [values[i] for i in expected_steps if i in values]
-    gsi_tags_ok &= sorted(values) == expected_steps and all(
-      math.isfinite(v) for v in ordered
-    )
-    gsi_tags_ok &= all(a <= b for a, b in zip(ordered, ordered[1:], strict=False))
-    gsi_tags_ok &= values.get(args.iterations) == totals.get(name)
-  report.check(
-    "GSI TensorBoard cumulative counters complete and match metadata", gsi_tags_ok
-  )
 
   steps = {
     t: sorted(scalars[f"{NS}/{t}"]) for t in FIXED_TAGS if f"{NS}/{t}" in scalars
@@ -793,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
 | 完成迭代 | `{info.get("completed_iterations")}` / {args.iterations} |
 | 训练样本 | `{info.get("total_samples")}` / {expected_samples} |
 | 训练耗时 | {elapsed_h:.2f} h（`Time/training_elapsed_s`） |
-| 环境数 / 每轮步数 / 种子 | {args.num_envs} / {args.steps_per_env} / 2027 |
+| 环境数 / 每轮步数 / 种子 | {args.num_envs} / {args.steps_per_env} / 2028 |
 | TensorBoard 固定标量 | {21 - len(missing_tags)}/21 |
 | TensorBoard 条件标量 | {len(optional_present)}/7 |
 | 最终检查点 | `{final_name}` |

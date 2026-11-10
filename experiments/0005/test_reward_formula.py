@@ -164,16 +164,12 @@ def main():
   changed = subprocess.check_output(
     ["git", "diff", "--name-only", BASELINE, "--", "src/"], cwd=ROOT, text=True
   ).splitlines()
-  assert set(changed) <= {
+  assert set(changed) == {
     "src/smp/rl/rewards.py",
     "src/smp/rl/tasks/location/location_env_cfg.py",
-    "src/smp/rl/events.py",
-    "src/smp/rl/gsi_physics.py",
-    "src/smp/rl/gsi_physics_runtime.py",
-    "src/smp/rl/mixed_cache.py",
   }, changed
   print(
-    "PASS frozen prior/lock, unchanged rewards/PPO/other tasks, GSI changes isolated"
+    "PASS frozen prior/lock and unchanged guidance, PPO, GSI and other task sources"
   )
   print("REWARD_FORMULA_CHECK=PASS (scalar stubs; no simulator or GPU was run)")
 

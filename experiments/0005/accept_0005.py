@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument("--num-envs", type=int, default=64)
   parser.add_argument("--steps", type=int, default=2400, help="env.step calls")
   parser.add_argument("--steps-per-env", type=int, default=24)
-  parser.add_argument("--seed", type=int, default=2027)
+  parser.add_argument("--seed", type=int, default=2028)
   parser.add_argument("--out", type=str, required=True, help="acceptance output dir")
   args = parser.parse_args(argv)
 
@@ -145,13 +145,6 @@ def main(argv: list[str] | None = None) -> int:
   device = "cuda:0"
 
   env_cfg = load_env_cfg(TASK_ID, play=False)
-  experiment = json.loads(
-    Path(__file__).with_name("EXPERIMENT.json").read_text(encoding="utf-8")
-  )
-  repair_enabled = experiment["physical_filter"]["repair_small_joints"]
-  env_cfg.events["init_smp_state"].params.update(
-    physical_filter=True, repair_small_joints=repair_enabled
-  )
   env_cfg.scene.num_envs = args.num_envs
   env_cfg.seed = args.seed
   weight = float(env_cfg.rewards["task_smp_additive"].weight)
@@ -252,43 +245,6 @@ def main(argv: list[str] | None = None) -> int:
 
   buf = env._smp_buffer
   pool = env._smp_gsi_pool
-  physics = env._smp_physics
-  _, valid, physical_stats = physics.process(pool.detach().cpu().numpy(), repair=False)
-  check(
-    "all 4096 startup windows strictly pass full ten-frame physical checks",
-    bool(valid.all()),
-  )
-  check(
-    "33 colliders / 469 checked pairs",
-    len(physics.geoms) == 33 and len(physics.pairs) == 469,
-  )
-  check(
-    "startup fixed qualified insertions", env._smp_physics_totals["inserted"] == 4096
-  )
-  check(
-    "startup qualified = inserted + surplus",
-    env._smp_physics_totals["qualified"] == 4096 + env._smp_physics_totals["surplus"],
-  )
-  repair_probe_count = 0
-  if repair_enabled:
-    from smp.rl.events import _prime_sim_and_buffer
-
-    repaired_ids = torch.nonzero(env._smp_gsi_repaired_rows, as_tuple=False).flatten()
-    check("corrected candidates actually inserted", len(repaired_ids) > 0)
-    repair_probe_count = min(env.num_envs, len(repaired_ids))
-    if repair_probe_count:
-      ids = torch.arange(repair_probe_count, device=env.device)
-      windows = pool[repaired_ids[:repair_probe_count]]
-      _prime_sim_and_buffer(env, ids, windows)
-      expected_v = (windows[:, -1, 9:38] - windows[:, -2, 9:38]) / env.step_dt
-      check(
-        "corrected initialization velocity re-differenced",
-        bool(torch.allclose(env._smp_buffer.joint_vel[ids, -1], expected_v)),
-      )
-      check(
-        "corrected full history primed",
-        bool(torch.equal(env._smp_buffer.joint_pos[ids], windows[:, :, 9:38])),
-      )
   check("GSI pool size 4096", pool.shape[0] == 4096, f"shape={tuple(pool.shape)}")
   check(
     "GSI head starts at 0 (created lazily)", int(getattr(env, "_smp_gsi_head", 0)) == 0
@@ -361,10 +317,6 @@ def main(argv: list[str] | None = None) -> int:
   iterations = args.steps // args.steps_per_env
   per_iteration: list[dict] = []
   prev_snapshot = tracker.snapshot()
-  repair_probe_failed = torch.zeros(
-    repair_probe_count, dtype=torch.bool, device=env.device
-  )
-  repair_probe_velocity_max = 0.0
 
   for it in range(iterations):
     iter_start = time.time()
@@ -382,15 +334,6 @@ def main(argv: list[str] | None = None) -> int:
         * 0.3
       )
       obs, rew, terminated, time_outs, extras = env.step(actions)
-      if repair_probe_count and k < 50:
-        repair_probe_failed |= terminated[:repair_probe_count]
-        current_v = env.scene["robot"].data.joint_vel[:repair_probe_count]
-        check_finite = bool(torch.isfinite(current_v).all())
-        if not check_finite:
-          check("corrected first-second simulated joint velocities finite", False)
-        repair_probe_velocity_max = max(
-          repair_probe_velocity_max, float(current_v.abs().max())
-        )
       collect += 0.0
       additive = holder["additive"]
       if not bool(
@@ -592,22 +535,7 @@ def main(argv: list[str] | None = None) -> int:
   )
 
   failures = [name for name, ok, _ in CHECKS if not ok]
-  _, valid, _ = physics.process(pool.detach().cpu().numpy(), repair=False)
-  check("refreshed pool strictly passes full checks", bool(valid.all()))
-  check(
-    "startup plus refresh inserted 5120", env._smp_physics_totals["inserted"] == 5120
-  )
-  if not repair_enabled:
-    check("0005 never repairs", env._smp_physics_totals["repair_attempted"] == 0)
-  failures = [name for name, ok, _ in CHECKS if not ok]
   summary = {
-    "physical_filter_totals": dict(env._smp_physics_totals),
-    "repair_first_second_probe": {
-      "num_envs": repair_probe_count,
-      "failure_count": int(repair_probe_failed.sum()),
-      "max_abs_joint_velocity_rad_s": repair_probe_velocity_max,
-      "note": "zero policy updates; original acceptance random actions, not a performance comparison; failures do not introduce an extra admission criterion",
-    },
     "task_id": TASK_ID,
     "num_envs": args.num_envs,
     "steps": args.steps,
