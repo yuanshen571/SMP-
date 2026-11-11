@@ -1,0 +1,65 @@
+{
+  "experiment": "00062",
+  "branch": "00062",
+  "baseline_branch": "0003",
+  "baseline_commit": "cc23d007679ffda1b7f5dd379bd2cce4ae3cc486",
+  "task": "Smp-Location-G1",
+  "seed": 2029,
+  "num_envs": 1024,
+  "num_steps_per_env": 24,
+  "iterations": 10000,
+  "samples": 245760000,
+  "reward": {
+    "formula": "0.5 * r_task + 0.5 * r_smp",
+    "task_weight": 0.5,
+    "smp_weight": 0.5,
+    "position_weight": 1.0,
+    "velocity_weight": 0.0,
+    "facing_weight": 0.0,
+    "position_kernel": "exp(-0.25 * horizontal_distance_m)",
+    "smp_ws": 4,
+    "fixed_timesteps": [
+      8,
+      15,
+      22
+    ],
+    "manager_weight": 1.0,
+    "scale_rewards_by_dt": true,
+    "step_dt": 0.02
+  },
+  "prior_sha256": "74787104ff124191136eeed2268f79448da3ac2e30e710d42aebfc5a60e58cb3",
+  "uv_lock_sha256": "ce041c7774b1d4abf42e868fa3b4af2973954cec61d35c3b4e58a7e27464d9ce",
+  "runtime_validation": "local source/protocol checks only; real server acceptance and independent smoke required",
+  "physical_filter": {
+    "repair_small_joints": false,
+    "repair_limit_deg": 1.0,
+    "joint_frames": 10,
+    "joint_tolerance_rad": 1e-05,
+    "self_frames": 10,
+    "self_geom_pairs": 469,
+    "self_tolerance_mm": 0,
+    "ground_frames": 10,
+    "ground_limit_mm": 19.72
+  },
+  "gsi": {
+    "capacity": 4096,
+    "refresh_inserted": 1024,
+    "refresh_control_steps": 2400,
+    "raw_batch_size": 1024,
+    "quota": "fixed qualified insertions, regenerate until filled",
+    "emergency_bound": "100 times requested count, abort without fallback"
+  },
+  "repeats_experiment": "0003",
+  "only_training_change": "random seed 2027 -> 2029",
+  "initialization": "load seed-2029 0006 untrained actor/critic only; independent fresh optimizer",
+  "physical_filter_enabled": true,
+  "mixed_cache_enabled": false,
+  "clustering_enabled": false,
+  "control": {
+    "experiment": "0006",
+    "seed": 2029,
+    "run_info": "/root/gpufree-data/smp-g1/logs/0006_location_seed2029_seed2029_0006_00061_20261111_101252_qRXCEI/run_info.json",
+    "initial_checkpoint": "/root/gpufree-data/smp-g1/ckpt/0006_location_seed2029_seed2029_0006_00061_20261111_101252_qRXCEI/initial_untrained.pt",
+    "initial_models_sha256": "14cf8aad160636a4655a745c5147f53bbf425c3433e1293cf2f77c1ff463028d"
+  }
+}
