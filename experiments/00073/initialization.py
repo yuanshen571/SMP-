@@ -65,6 +65,23 @@ def validate_control(path, control_info):
   return info
 
 
+def validate_startup_control(path, control_info, expected_control):
+  """Validate runtime identity; enforce static fingerprints only if supplied."""
+  record = validate_control(path, control_info)
+  assert record["experiment"] == expected_control["experiment"]
+  assert record["seed"] == expected_control["seed"]
+  if "initial_models_sha256" in expected_control:
+    assert (
+      record["initial_models_sha256"] == expected_control["initial_models_sha256"]
+    ), "initial models do not match the pinned source"
+  if "initial_checkpoint_sha256" in expected_control:
+    assert (
+      record["saved_initial_checkpoint_sha256"]
+      == expected_control["initial_checkpoint_sha256"]
+    ), "initial checkpoint does not match the pinned source"
+  return record
+
+
 def load_common_initial(runner, path, control_info):
   validate_control(path, control_info)
   payload = torch.load(path, map_location="cpu", weights_only=False)

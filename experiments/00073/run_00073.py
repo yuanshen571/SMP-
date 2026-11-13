@@ -42,7 +42,7 @@ build_logged_task_smp_additive = _metrics_mod.build_logged_task_smp_additive
 install_metrics = _metrics_mod.install
 
 from events_adapter import configure  # noqa: E402
-from initialization import load_common_initial, validate_control  # noqa: E402
+from initialization import load_common_initial, validate_startup_control  # noqa: E402
 
 TASK_ID = "Smp-Location-G1"
 EXPERIMENT = "00073"
@@ -181,13 +181,10 @@ def main(argv: list[str] | None = None) -> int:
   from contract import check_files
 
   check_files(quiet=True)
-  control_record = validate_control(args.initial_checkpoint, args.control_info)
   expected_control = json.loads(
     Path(__file__).with_name("EXPERIMENT.json").read_text()
   )["control"]
-  assert (
-    control_record["initial_models_sha256"] == expected_control["initial_models_sha256"]
-  ), "must reuse the same untrained seed-2030 models as 0003"
+  validate_startup_control(args.initial_checkpoint, args.control_info, expected_control)
   if not args.initial_checkpoint.is_file():
     raise FileNotFoundError(args.initial_checkpoint)
 

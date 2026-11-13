@@ -53,6 +53,22 @@ class VariantTests(unittest.TestCase):
       .replace("2027", "2030")
       .replace("2030 0002", "2030 0007")
     )
+    expected = expected.replace(
+      "from initialization import load_common_initial, validate_control",
+      "from initialization import load_common_initial, validate_startup_control",
+    )
+    expected = expected.replace(
+      "  control_record = validate_control(args.initial_checkpoint, args.control_info)\n",
+      "",
+    )
+    old_check = (
+      "  assert (\n"
+      '    control_record["initial_models_sha256"] == expected_control["initial_models_sha256"]\n'
+      '  ), "must reuse the same untrained seed-2030 models as 0003"\n'
+    )
+    new_check = "  validate_startup_control(args.initial_checkpoint, args.control_info, expected_control)\n"
+    self.assertIn(old_check, expected)
+    expected = expected.replace(old_check, new_check)
     self.assertEqual((HERE / "run_00073.py").read_text(), expected)
 
 
