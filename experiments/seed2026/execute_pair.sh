@@ -8,8 +8,19 @@ cd "${REPO}"
   exit 2
 }
 SMP_G1_ROOT="$(dirname "${REPO}")"
-exec 9>"${SMP_G1_ROOT}/.0003_00031_queue.lock"
-flock -n 9 || { printf 'another SMP workflow holds the shared lock\n' >&2; exit 2; }
+if [[ -n "${SMP_QUEUE_LOCK_FD:-}" ]]; then
+  [[ "${SMP_QUEUE_LOCK_FD}" =~ ^[0-9]+$ ]] || exit 2
+  exec 9>&"${SMP_QUEUE_LOCK_FD}"
+  "${SMP_G1_ROOT}/venv/bin/python" - "${SMP_G1_ROOT}/.0003_00031_queue.lock" <<'PYLOCK'
+import fcntl, os, sys
+opened, expected = os.fstat(9), os.stat(sys.argv[1])
+assert (opened.st_dev, opened.st_ino) == (expected.st_dev, expected.st_ino), 'wrong inherited queue lock'
+fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+PYLOCK
+else
+  exec 9>"${SMP_G1_ROOT}/.0003_00031_queue.lock"
+  flock -n 9 || { printf 'another SMP workflow holds the shared lock\n' >&2; exit 2; }
+fi
 source experiments/0008/activate_0008.sh
 PYTHON="${SMP_G1_ROOT}/venv/bin/python"
 EXPECTED_TARGET="${1:?provide the delivered full 00083 commit SHA}"
