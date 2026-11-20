@@ -80,7 +80,7 @@ info=json.loads(Path(sys.argv[1]).read_text())
 execution=Path(sys.argv[2])
 audit=json.loads((execution/'smoke_archive_check.json').read_text())
 archive=Path(info['gsi_archive_dir']).resolve()
-root=Path('/gpufree-share/smp_gsi_paired_0009/smoke').resolve()
+root=Path('/root/gpufree-share/smp_gsi_paired_0009/smoke').resolve()
 assert info['experiment']=='0009' and info['stage']=='smoke'
 assert archive.parent==root and archive.name==info['run_id']
 assert audit['status']=='PASS' and Path(audit['directory']).resolve()==archive

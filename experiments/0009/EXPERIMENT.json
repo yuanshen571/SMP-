@@ -51,7 +51,7 @@
   },
   "gsi_recording": {
     "enabled": true,
-    "root": "/gpufree-share/smp_gsi_paired_0009",
+    "root": "/root/gpufree-share/smp_gsi_paired_0009",
     "dtype": "float32",
     "feature_shape": [
       10,
