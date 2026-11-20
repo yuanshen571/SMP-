@@ -55,8 +55,8 @@ def main():
   if args.environment:
     import torch
 
-    archive_mount = Path("/gpufree-share")
-    assert archive_mount.is_dir(), "requested /gpufree-share missing; verify shared storage path, do not create a system-disk substitute"
+    archive_mount = Path("/root/gpufree-share")
+    assert archive_mount.is_dir(), "requested /root/gpufree-share missing; verify shared storage path, do not create a system-disk substitute"
     assert shutil.disk_usage(archive_mount).free >= 35_000_000_000, "at least 35 GB shared-storage free space required"
 
     assert Path(sys.prefix).resolve() == (ROOT.parent / "venv").resolve(), (

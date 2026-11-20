@@ -160,7 +160,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     help="disable the passive metrics layer entirely (A/B determinism check)",
   )
   parser.add_argument("--stage", choices=("smoke", "formal"), default="formal")
-  parser.add_argument("--archive-root", type=Path, default=Path("/gpufree-share/smp_gsi_paired_0009"))
+  parser.add_argument("--archive-root", type=Path, default=Path("/root/gpufree-share/smp_gsi_paired_0009"))
   return parser.parse_args(argv)
 
 
@@ -170,11 +170,11 @@ def main(argv: list[str] | None = None) -> int:
   assert args.num_envs == 1024
   assert args.max_iterations == (20000 if args.stage == "formal" else 2)
   assert not args.no_metrics, "both paired experiments use the same passive metrics"
-  assert Path("/gpufree-share").is_dir(), "requested /gpufree-share must exist; do not silently use another disk"
+  assert Path("/root/gpufree-share").is_dir(), "requested /root/gpufree-share must exist; do not silently use another disk"
   assert args.archive_root.is_absolute()
-  assert args.archive_root.resolve().is_relative_to(Path("/gpufree-share").resolve())
+  assert args.archive_root.resolve().is_relative_to(Path("/root/gpufree-share").resolve())
   if args.stage == "formal":
-    assert shutil.disk_usage("/gpufree-share").free >= 35_000_000_000, "reserve at least 35 GB before formal recording"
+    assert shutil.disk_usage("/root/gpufree-share").free >= 35_000_000_000, "reserve at least 35 GB before formal recording"
 
   from contract import check_files
 
