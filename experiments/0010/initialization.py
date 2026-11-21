@@ -1,4 +1,4 @@
-"""Seed-2026 paired initialization; reads model tensors without consuming RNG."""
+"""Seed-2028 paired initialization; reads model tensors without consuming RNG."""
 
 from __future__ import annotations
 
@@ -36,16 +36,16 @@ def assert_untrained(payload, *, require_provenance=False):
   if require_provenance:
     info = payload.get("infos", {})
     assert info.get("stage") == "initial_untrained"
-    assert info.get("initialization_seed") == 2026, "expected a seed-2026 source"
+    assert info.get("initialization_seed") == 2028, "expected a seed-2028 source"
     assert info.get("experiment") == "0010", "expected the new 0010 baseline"
 
 
 def validate_control(path, control_info):
-  """Require the actual completed baseline, never an old 2027 or smoke model."""
+  """Require the actual completed baseline, never an old 2028 or smoke model."""
   path, control_info = Path(path).resolve(), Path(control_info).resolve()
   info = json.loads(control_info.read_text(encoding="utf-8"))
-  assert info["experiment"] == "0010" and info["seed"] == 2026
-  assert info["initialization_seed"] == 2026
+  assert info["experiment"] == "0010" and info["seed"] == 2028
+  assert info["initialization_seed"] == 2028
   assert info["initialization_mode"] == "fresh_seed"
   assert info["completed_iterations"] == info["max_iterations"] == 20000
   assert info["num_envs"] == 1024 and info["num_steps_per_env"] == 24

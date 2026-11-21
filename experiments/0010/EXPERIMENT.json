@@ -1,10 +1,10 @@
 {
   "experiment": "0010",
   "branch": "0010",
-  "baseline_branch": "exp0002-location-additive",
+  "baseline_branch": "0005",
   "baseline_commit": "0a4ceff351b1f4885b61b6bfddee80ec49cb1874",
   "task": "Smp-Location-G1",
-  "seed": 2026,
+  "seed": 2028,
   "num_envs": 1024,
   "num_steps_per_env": 24,
   "iterations": 20000,
@@ -29,10 +29,10 @@
   },
   "prior_sha256": "74787104ff124191136eeed2268f79448da3ac2e30e710d42aebfc5a60e58cb3",
   "uv_lock_sha256": "ce041c7774b1d4abf42e868fa3b4af2973954cec61d35c3b4e58a7e27464d9ce",
-  "runtime_validation": "not run locally; server acceptance, smoke and formal completion verification required",
-  "repeats_experiment": "0008",
-  "only_training_change": "relative to 0008: total PPO iterations 10000 -> 20000; experiment identity, output paths and audit labels updated accordingly",
-  "initialization": "fresh seed-2026 untrained actor/critic, fresh optimizer; no checkpoint resume; independent smoke and formal processes",
+  "runtime_validation": "local CPU/source only; server B common environment setup, GPU replay, simulation and smoke mandatory",
+  "repeats_experiment": "0005",
+  "only_training_change": "0005 method on server B; 20000 iterations; isolated GSI RNG and complete float32 raw-window/noise recording",
+  "initialization": "fresh seed-2028 actor/critic and optimizer; save actual untrained tensors for a future paired rescue run",
   "physical_filter_enabled": false,
   "mixed_cache_enabled": false,
   "clustering_enabled": false,
@@ -44,8 +44,64 @@
   },
   "method_origin_commit": "0a4ceff351b1f4885b61b6bfddee80ec49cb1874",
   "implementation_reference": {
-    "experiment": "0008",
-    "branch": "0008",
-    "commit": "17a5bdad6f4951c6c0363b459cd37a72cbf2fd6d"
+    "method_experiment": "0005",
+    "method_commit": "0a4ceff351b1f4885b61b6bfddee80ec49cb1874",
+    "harness_experiment": "0008",
+    "harness_commit": "17a5bdad6f4951c6c0363b459cd37a72cbf2fd6d",
+    "archive_experiment": "0009",
+    "archive_commit": "c5843c8fa1c67879e0c1f4e66c49d81ce82d8e1f"
+  },
+  "gsi_recording": {
+    "enabled": true,
+    "root": "/home/yang/rollout/smp_gsi_paired_0010",
+    "dtype": "float32",
+    "feature_shape": [
+      10,
+      59
+    ],
+    "posterior_steps": [
+      49,
+      1,
+      -1
+    ],
+    "posterior_count": 49,
+    "original_rows": 208896,
+    "decoder_batch_size": 1024,
+    "shards": 204,
+    "transactions": 201,
+    "deduplicate": false,
+    "filter": false,
+    "repair": false,
+    "rescue": false,
+    "min_free_bytes_formal": 35000000000
+  },
+  "rng_protocol": {
+    "version": 1,
+    "training_seed": 2028,
+    "gsi_seed": 102028,
+    "implementation": "independent persistent CPU/CUDA torch states under fork_rng; restore caller states after each GSI generation; archive exact initial and 49 posterior tensors",
+    "future_rescue": "separate search RNG; never consumes caller/training RNG",
+    "scope": "GSI DDPM generation only; baseline uniform reset sampling, reward noise and PPO retain their native training stream"
+  },
+  "noise_rescue_enabled": false,
+  "server": "B",
+  "retired_experiment_0010": {
+    "commit": "e6663d72ccf4a016bca27cb0cdb75a7fcc0dcd2b",
+    "method": "0008 seed2026, 20000 iterations, server A",
+    "status": "retired by user; identifier 0010 now denotes server B seed2028 paired baseline"
+  },
+  "server_b": {
+    "hostname": "zxq",
+    "user": "yang",
+    "address": "172.25.24.236",
+    "port": 22,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "vram_gib": 24,
+    "ram_gib": 31,
+    "driver_reported": "580.173.02",
+    "project_root": "/home/yang/SMP+",
+    "archive_mount": "/home/yang/rollout",
+    "python": "3.13.18",
+    "uv": "0.13.7"
   }
 }

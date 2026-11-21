@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Reuse the one existing server environment; never create or install another.
+# Activate the single shared server-B environment, not an experiment-specific venv.
 SMP_0010_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SMP_0010_ROOT="$(dirname "${SMP_0010_REPO}")"
-if [[ ! -f "${SMP_0010_ROOT}/env.sh" || ! -x "${SMP_0010_ROOT}/venv/bin/python" ]]; then
-  printf 'existing shared env.sh and venv required\n' >&2
+if [[ "${SMP_0010_ROOT}" != /home/yang/SMP+ || ! -f "${SMP_0010_ROOT}/env.sh" || ! -x "${SMP_0010_ROOT}/venv/bin/python" || ! -f "${SMP_0010_ROOT}/setup/shared_environment.json" ]]; then
+  printf 'server B shared setup required: run experiments/0010/setup_server_b.sh first\n' >&2
   return 2 2>/dev/null || exit 2
 fi
 source "${SMP_0010_ROOT}/env.sh"
-export UV_PROJECT_ENVIRONMENT="${SMP_0010_ROOT}/venv"
-export PATH="${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"
-export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 WANDB_MODE=disabled
 export SMP_0010_REPO SMP_0010_ROOT

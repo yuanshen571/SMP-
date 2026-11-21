@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument("--num-envs", type=int, default=64)
   parser.add_argument("--steps", type=int, default=2400, help="env.step calls")
   parser.add_argument("--steps-per-env", type=int, default=24)
-  parser.add_argument("--seed", type=int, default=2026)
+  parser.add_argument("--seed", type=int, default=2028)
   parser.add_argument("--out", type=str, required=True, help="acceptance output dir")
   args = parser.parse_args(argv)
 

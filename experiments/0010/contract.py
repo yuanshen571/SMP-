@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.metadata
-import importlib.util
 import json
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,14 +20,21 @@ def check_files(*, quiet=False):
     assert actual == digest, f"baseline file changed: {name}"
   tracked = subprocess.check_output(["git", "ls-files", "src"], cwd=ROOT, text=True)
   assert set(tracked.splitlines()) == {p for p in expected if p.startswith("src/")}
-  assert spec["experiment"] == EXP.name and spec["seed"] == 2026
+  assert spec["experiment"] == EXP.name and spec["seed"] == 2028
+  assert spec["server"] == "B" and spec["repeats_experiment"] == "0005"
+  assert spec["gsi_recording"]["root"] == "/home/yang/rollout/smp_gsi_paired_0010"
   assert spec["num_envs"] == 1024 and spec["num_steps_per_env"] == 24
   assert spec["iterations"] == 20000 and spec["samples"] == 491520000
   assert spec["physical_filter_enabled"] is False
   assert spec["mixed_cache_enabled"] is spec["clustering_enabled"] is False
+  assert spec["noise_rescue_enabled"] is False
+  assert spec["gsi_recording"]["dtype"] == "float32"
+  assert spec["gsi_recording"]["original_rows"] == 208896
+  assert spec["rng_protocol"]["training_seed"] == 2028
+  assert spec["rng_protocol"]["gsi_seed"] == 102028
   if not quiet:
     print(
-      f"BASELINE_SOURCE_CHECK=PASS ({len(expected)} files, {spec['repeats_experiment']}, seed 2026)"
+      f"BASELINE_SOURCE_CHECK=PASS ({len(expected)} files, {spec['repeats_experiment']}, seed 2028)"
     )
   return spec
 
@@ -44,51 +47,15 @@ def main():
   spec = check_files()
   result = {
     "experiment": spec["experiment"],
-    "seed": 2026,
+    "seed": 2028,
     "baseline_commit": spec["baseline_commit"],
   }
   if args.environment:
-    import torch
+    from server_b_runtime import check_environment
 
-    assert Path(sys.prefix).resolve() == (ROOT.parent / "venv").resolve(), (
-      "reuse shared venv"
-    )
-    package = importlib.util.find_spec("smp")
-    assert (
-      package is not None
-      and Path(package.origin).resolve() == ROOT / "src/smp/__init__.py"
-    ), "editable smp must point to this shared repo"
-    versions = {
-      name: importlib.metadata.version(name)
-      for name in (
-        "torch",
-        "numpy",
-        "mujoco",
-        "mjlab",
-        "mujoco-warp",
-        "rsl-rl-lib",
-        "tensorboard",
-      )
-    }
-    assert versions["mjlab"] == "1.6.0" and versions["mujoco"] == "3.11.0"
-    assert versions["mujoco-warp"] == "3.11.0" and versions["rsl-rl-lib"] == "5.4.2"
-    assert versions["torch"].startswith("2.10.")
-    assert torch.cuda.is_available(), "server CUDA required"
-    gpu = torch.cuda.get_device_name(0)
-    assert "L40" in gpu, f"expected the agreed L40, found {gpu}"
-    uv = ROOT.parent / "tools/uv"
-    executable = str(uv) if uv.is_file() else shutil.which("uv")
-    if executable:
-      subprocess.run(
-        [executable, "pip", "check", "--python", sys.executable], check=True
-      )
-    else:
-      subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
-    result.update(
-      versions=versions,
-      gpu=gpu,
-      python=sys.version,
-      shared_env=str(Path(sys.prefix).resolve()),
+    result.update(check_environment(ROOT))
+    assert result["archive_free_bytes"] >= 35_000_000_000, (
+      "reserve 35 GB for recorded GSI data"
     )
     print("SHARED_ENVIRONMENT_CHECK=PASS")
   if args.out:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Experiment 0010: G1 Location with 0.5 task + 0.5 SMP rewards.
 
-Extends experiment 0008 from 10000 to 20000 iterations. All simulation,
-reward, PPO, GSI and passive metric behavior is inherited unchanged.
+Experiment 0005 method with 20000 iterations and paired GSI/noise recording.
+Only DDPM generation uses a private RNG; FIFO/reset/reward/PPO logic is unchanged.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -45,6 +46,7 @@ PassiveMetrics = _metrics_mod.PassiveMetrics
 build_logged_task_smp_additive = _metrics_mod.build_logged_task_smp_additive
 install_metrics = _metrics_mod.install
 
+from gsi_archive import ArchiveRecorder, atomic_json  # noqa: E402
 from initialization import assert_untrained, initial_models_digest  # noqa: E402
 
 TASK_ID = "Smp-Location-G1"
@@ -143,7 +145,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="experiment 0010 launcher")
   parser.add_argument("--num-envs", type=int, default=1024)
   parser.add_argument("--max-iterations", type=int, default=20000)
-  parser.add_argument("--seed", type=int, default=2026)
+  parser.add_argument("--seed", type=int, default=2028)
   parser.add_argument("--device", type=str, default="cuda:0")
   parser.add_argument(
     "--log-root", type=str, default=str(Path("logs").resolve()), help="run logs root"
@@ -157,13 +159,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     action="store_true",
     help="disable the passive metrics layer entirely (A/B determinism check)",
   )
+  parser.add_argument("--stage", choices=("smoke", "formal"), default="formal")
+  parser.add_argument("--archive-root", type=Path, default=Path("/home/yang/rollout/smp_gsi_paired_0010"))
   return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
-  assert args.seed == 2026, "this experiment is fixed to seed 2026"
+  assert args.seed == 2028, "this experiment is fixed to seed 2028"
+  assert args.num_envs == 1024
+  assert args.max_iterations == (20000 if args.stage == "formal" else 2)
+  assert not args.no_metrics, "both paired experiments use the same passive metrics"
+  assert Path("/home/yang/rollout").is_dir(), "requested /home/yang/rollout must exist; do not silently use another disk"
+  assert args.archive_root.is_absolute()
+  assert args.archive_root.resolve().is_relative_to(Path("/home/yang/rollout").resolve())
+  if args.stage == "formal":
+    assert shutil.disk_usage("/home/yang/rollout").free >= 35_000_000_000, "reserve at least 35 GB before formal recording"
+
   from contract import check_files
+  from server_b_runtime import check_identity
+
+  check_identity(REPO_ROOT)
 
   check_files(quiet=True)
 
@@ -261,8 +277,8 @@ def main(argv: list[str] | None = None) -> int:
     "started_at": stamp.isoformat(),
     "task_id": TASK_ID,
     "experiment": EXPERIMENT,
-    "repeats_experiment": "0008",
-    "initialization_seed": 2026,
+    "repeats_experiment": "0005",
+    "initialization_seed": 2028,
     "initialization_mode": "fresh_seed",
     "baseline_files_verified": True,
     "physical_filter_enabled": False,
@@ -303,6 +319,13 @@ def main(argv: list[str] | None = None) -> int:
     "prior_sha256": prior_sha,
     "uv_lock_sha256": lock_sha,
     "metrics_enabled": not args.no_metrics,
+    "stage": args.stage,
+    "server": "B",
+    "experiment_definition": "server-b-seed2028-paired-v1",
+    "gsi_generation_rng_seed": 102028,
+    "gsi_generation_rng_isolated": True,
+    "gsi_recording_enabled": True,
+    "noise_rescue_enabled": False,
     "episode_length_s": env_dict.get("episode_length_s"),
     "decimation": env_dict.get("decimation"),
     "scale_rewards_by_dt": env_dict.get("scale_rewards_by_dt"),
@@ -322,6 +345,22 @@ def main(argv: list[str] | None = None) -> int:
     f"({run_info['git_branch']})"
   )
 
+  # Pairing archive is created before the actual environment startup GSI.
+  archive_dir = args.archive_root.resolve() / args.stage / run_id
+  archive_dir.parent.mkdir(parents=True, exist_ok=True)
+  recorder = ArchiveRecorder(archive_dir, seed=102028, device=args.device,
+                            provenance={"run_id": run_id, "stage": args.stage,
+                                        "training_seed": 2028,
+                                        "git_commit": run_info["git_commit"],
+                                        "prior_sha256": prior_sha,
+                                        "uv_lock_sha256": lock_sha})
+  import smp.rl.events as native_events
+  recorder.install(native_events)
+  run_info["gsi_archive_dir"] = str(archive_dir)
+  run_info["gsi_archive_manifest"] = str(archive_dir / "manifest.json")
+  (log_dir / "run_info.json").write_text(
+    json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+  )
   # ------------------------------------------------------------------- env
   env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device, render_mode=None)
   print(
@@ -352,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = dict(infos or {})
     payload.setdefault("run_id", run_id)
     payload.setdefault("experiment", EXPERIMENT)
-    payload.setdefault("initialization_seed", 2026)
+    payload.setdefault("initialization_seed", 2028)
     original_save(str(target), payload)
     initial = target.name == "initial_untrained.pt"
     iteration = int(runner.current_learning_iteration)
@@ -385,6 +424,13 @@ def main(argv: list[str] | None = None) -> int:
     json.dumps(run_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
   )
 
+  recorder.manifest["provenance"].update(
+    initial_models_sha256=run_info["initial_models_sha256"],
+    saved_initial_checkpoint_sha256=run_info["saved_initial_checkpoint_sha256"],
+    initial_checkpoint=str(ckpt_dir / "initial_untrained.pt"),
+    run_info=str(log_dir / "run_info.json"),
+  )
+  atomic_json(archive_dir / "manifest.json", recorder.manifest)
   if metrics is not None:
     metrics.attach(runner)
 
@@ -392,12 +438,21 @@ def main(argv: list[str] | None = None) -> int:
     runner.learn(
       num_learning_iterations=args.max_iterations, init_at_random_ep_len=True
     )
+    assert int(runner.current_learning_iteration) + 1 == args.max_iterations
+    recorder.finish(env, completed_iterations=args.max_iterations, steps_per_env=steps_per_env)
+    run_info["gsi_recorded_rows"] = recorder.manifest["rows"]
+    run_info["gsi_recorded_shards"] = len(recorder.manifest["batches"])
+    run_info["gsi_archive_status"] = recorder.manifest["status"]
   finally:
     if metrics is not None:
       metrics.finalize(runner)
     wrapped.close()
+    recorder.uninstall()
 
   completed = int(runner.current_learning_iteration) + 1
+  if torch.cuda.is_available():
+    run_info['torch_peak_allocated_mib']=torch.cuda.max_memory_allocated()/2**20
+    run_info['torch_peak_reserved_mib']=torch.cuda.max_memory_reserved()/2**20
   run_info["finished_at"] = _now().isoformat()
   run_info["completed_iterations"] = completed
   run_info["total_samples"] = completed * steps_per_env * int(args.num_envs)

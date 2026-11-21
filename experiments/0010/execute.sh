@@ -3,6 +3,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO}"
+[[ "${REPO}" == /home/yang/SMP+/repo && "$(id -un)" == yang && "$(id -u)" != 0 && "$(hostname -s)" == zxq ]] || { printf 'new 0010 is for non-root yang on server B only\n' >&2; exit 2; }
 [[ "$(git branch --show-current)" == 0010 && -z "$(git status --porcelain)" ]] || {
   printf 'start on clean branch 0010; preserve any existing changes\n' >&2
   exit 2
@@ -30,7 +31,7 @@ if ! (set -o noclobber; printf 'execution=%s\ncommit=%s\n' "${EXECUTION}" "${COM
   printf '0010 already registered; inspect existing execution, do not launch twice\n' >&2
   exit 2
 fi
-printf 'experiment=0010\ncommit=%s\nseed=2026\niterations=20000\nsamples=491520000\n' "${COMMIT}" > "${EXECUTION}/revisions.txt"
+printf 'experiment=0010\ncommit=%s\nseed=2028\niterations=20000\nsamples=491520000\n' "${COMMIT}" > "${EXECUTION}/revisions.txt"
 check_source() {
   [[ "$(git branch --show-current)" == 0010 && "$(git rev-parse HEAD)" == "${COMMIT}" && -z "$(git status --porcelain)" ]] || {
     printf 'source changed during execution; stop and preserve it\n' >&2
@@ -58,25 +59,47 @@ run_logged() {
 mark_stage preflight
 run_logged "${EXECUTION}/preflight" "${PYTHON}" "${PREFIX}/contract.py" --environment --out "${EXECUTION}/environment.json"
 mark_stage tests
-for test in test_variant test_reward_formula test_passive_metrics test_initialization; do
+for test in test_variant test_reward_formula test_passive_metrics test_initialization test_archive test_server_b; do
   run_logged "${EXECUTION}/${test}" "${PYTHON}" "${PREFIX}/${test}.py"
 done
+mark_stage frozen_prior_replay
+run_logged "${EXECUTION}/sampler_replay" "${PYTHON}" "${PREFIX}/accept_sampler.py" --out "${EXECUTION}/sampler_replay.json"
 mark_stage environment_acceptance
-run_logged "${EXECUTION}/accept_console" "${PYTHON}" "${PREFIX}/accept_0010.py" --num-envs 64 --steps 2400 --seed 2026 --out "${EXECUTION}/acceptance"
+run_logged "${EXECUTION}/accept_console" "${PYTHON}" "${PREFIX}/accept_0010.py" --num-envs 64 --steps 2400 --seed 2028 --out "${EXECUTION}/acceptance"
 mark_stage smoke
-SMOKE="0010_smoke_seed2026_${TAG}"
+SMOKE="0010_smoke_seed2028_${TAG}"
 [[ ! -e "${SMP_G1_ROOT}/ckpt/${SMOKE}" ]] || exit 2
-run_logged "${SMP_G1_ROOT}/logs/${SMOKE}" "${PYTHON}" "${PREFIX}/run_0010.py" --num-envs 1024 --max-iterations 2 --seed 2026 --device cuda:0 --run "${SMOKE}" --log-root "${SMP_G1_ROOT}/logs" --ckpt-root "${SMP_G1_ROOT}/ckpt"
+run_logged "${SMP_G1_ROOT}/logs/${SMOKE}" "${PYTHON}" "${PREFIX}/run_0010.py" --num-envs 1024 --max-iterations 2 --stage smoke --seed 2028 --device cuda:0 --run "${SMOKE}" --log-root "${SMP_G1_ROOT}/logs" --ckpt-root "${SMP_G1_ROOT}/ckpt"
 run_logged "${EXECUTION}/smoke_verify" "${PYTHON}" "${PREFIX}/verify_completion.py" --iterations 2 --log-dir "${SMP_G1_ROOT}/logs/${SMOKE}" --ckpt-dir "${SMP_G1_ROOT}/ckpt/${SMOKE}"
+mark_stage smoke_archive_verification
+run_logged "${EXECUTION}/smoke_archive_verify" "${PYTHON}" "${PREFIX}/verify_archive.py" --iterations 2 --log-dir "${SMP_G1_ROOT}/logs/${SMOKE}" --out "${EXECUTION}/smoke_archive_check.json"
+# Remove only this verified smoke run's large payload, keeping its audit/manifest.
+"${PYTHON}" - "${SMP_G1_ROOT}/logs/${SMOKE}/run_info.json" "${EXECUTION}" <<'PYCLEAN'
+import json,shutil,sys
+from pathlib import Path
+info=json.loads(Path(sys.argv[1]).read_text())
+execution=Path(sys.argv[2])
+audit=json.loads((execution/'smoke_archive_check.json').read_text())
+archive=Path(info['gsi_archive_dir']).resolve()
+root=Path('/home/yang/rollout/smp_gsi_paired_0010/smoke').resolve()
+assert info['experiment']=='0010' and info['stage']=='smoke'
+assert archive.parent==root and archive.name==info['run_id']
+assert audit['status']=='PASS' and Path(audit['directory']).resolve()==archive
+shutil.copyfile(archive/'manifest.json',execution/'smoke_archive_manifest.json')
+shutil.rmtree(archive)
+(execution/'smoke_archive_cleanup.txt').write_text('Only this verified smoke payload was deleted: '+str(archive)+'\n',encoding='utf-8')
+PYCLEAN
 mark_stage formal_preflight
 run_logged "${EXECUTION}/formal_preflight" "${PYTHON}" "${PREFIX}/contract.py" --environment
 mark_stage formal_training
-RUN="0010_location_seed2026_${TAG}"
+RUN="0010_location_seed2028_${TAG}"
 [[ ! -e "${SMP_G1_ROOT}/ckpt/${RUN}" ]] || exit 2
 printf 'formal_run=%s\nsmoke_run=%s\n' "${RUN}" "${SMOKE}" > "${EXECUTION}/runs.txt"
-run_logged "${SMP_G1_ROOT}/logs/${RUN}" "${PYTHON}" "${PREFIX}/run_0010.py" --num-envs 1024 --max-iterations 20000 --seed 2026 --device cuda:0 --run "${RUN}" --log-root "${SMP_G1_ROOT}/logs" --ckpt-root "${SMP_G1_ROOT}/ckpt"
+run_logged "${SMP_G1_ROOT}/logs/${RUN}" "${PYTHON}" "${PREFIX}/run_0010.py" --num-envs 1024 --max-iterations 20000 --stage formal --seed 2028 --device cuda:0 --run "${RUN}" --log-root "${SMP_G1_ROOT}/logs" --ckpt-root "${SMP_G1_ROOT}/ckpt"
 mark_stage formal_verification
 run_logged "${EXECUTION}/formal_verify" "${PYTHON}" "${PREFIX}/verify_completion.py" --iterations 20000 --log-dir "${SMP_G1_ROOT}/logs/${RUN}" --ckpt-dir "${SMP_G1_ROOT}/ckpt/${RUN}" --out "${SMP_G1_ROOT}/logs/${RUN}/COMPLETION.md"
+mark_stage formal_archive_verification
+run_logged "${EXECUTION}/formal_archive_verify" "${PYTHON}" "${PREFIX}/verify_archive.py" --iterations 20000 --log-dir "${SMP_G1_ROOT}/logs/${RUN}" --out "${EXECUTION}/archive_check.json"
 check_source
 cp "${SMP_G1_ROOT}/logs/${RUN}/COMPLETION.md" "${EXECUTION}/COMPLETION.md"
 mark_stage complete

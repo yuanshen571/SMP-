@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
   info = json.loads((log_dir / "run_info.json").read_text())
   report.check(
     "correct seed-repeat experiment identity",
-    info.get("experiment") == "0010" and info.get("repeats_experiment") == "0008",
+    info.get("experiment") == "0010" and info.get("repeats_experiment") == "0005",
   )
   report.check(
     "unchanged method switches",
@@ -206,10 +206,26 @@ def main(argv: list[str] | None = None) -> int:
     and info.get("baseline_files_verified") is True,
   )
   report.check(
-    "seed-2026 initialization recorded",
-    info.get("initialization_seed") == 2026
+    "seed-2028 initialization recorded",
+    info.get("initialization_seed") == 2028
     and info.get("initialization_mode") == "fresh_seed",
   )
+  report.check(
+    "isolated, lossless unfiltered GSI recording enabled",
+    info.get("gsi_generation_rng_isolated") is True
+    and info.get("gsi_generation_rng_seed") == 102028
+    and info.get("gsi_recording_enabled") is True
+    and info.get("noise_rescue_enabled") is False
+    and info.get("gsi_archive_status") == "complete",
+  )
+  report.check(
+    "recorded GSI row budget matches startup and 100-iteration refreshes",
+    info.get("gsi_recorded_rows") == 4096 + (args.iterations * args.steps_per_env // 2400) * 1024
+    and info.get("gsi_recorded_shards") == 4 + args.iterations * args.steps_per_env // 2400,
+  )
+  report.check('new server B experiment identity',
+    info.get('server')=='B' and info.get('experiment_definition')=='server-b-seed2028-paired-v1'
+    and info.get('hostname','').split('.')[0]=='zxq' and 'RTX 3090' in info.get('gpu',''))
   saved_initial = ckpt_dir / "initial_untrained.pt"
   report.check(
     "saved initial checkpoint fingerprint",
@@ -227,10 +243,10 @@ def main(argv: list[str] | None = None) -> int:
     f"{info.get('total_samples')}",
   )
   report.check(
-    "run_info fixed parameters (1024 envs / 24 steps / seed 2026)",
+    "run_info fixed parameters (1024 envs / 24 steps / seed 2028)",
     info.get("num_envs") == args.num_envs
     and info.get("num_steps_per_env") == args.steps_per_env
-    and info.get("seed") == 2026,
+    and info.get("seed") == 2028,
     f"{info.get('num_envs')}/{info.get('num_steps_per_env')}/{info.get('seed')}",
   )
   report.check(
@@ -330,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
       initial_ok = initial_models_digest(ini) == info.get("initial_models_sha256")
     except (AssertionError, KeyError):
       initial_ok = False
-    report.check("fresh seed-2026 baseline initialization", initial_ok)
+    report.check("fresh seed-2028 baseline initialization", initial_ok)
     keys_ok = all(k in fin for k in ("actor_state_dict", "critic_state_dict", "iter"))
     loaded = bool(keys_ok)
     report.check(
@@ -600,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
 | 完成迭代 | `{info.get("completed_iterations")}` / {args.iterations} |
 | 训练样本 | `{info.get("total_samples")}` / {expected_samples} |
 | 训练耗时 | {elapsed_h:.2f} h（`Time/training_elapsed_s`） |
-| 环境数 / 每轮步数 / 种子 | {args.num_envs} / {args.steps_per_env} / 2026 |
+| 环境数 / 每轮步数 / 种子 | {args.num_envs} / {args.steps_per_env} / 2028 |
 | TensorBoard 固定标量 | {21 - len(missing_tags)}/21 |
 | TensorBoard 条件标量 | {len(optional_present)}/7 |
 | 最终检查点 | `{final_name}` |
@@ -618,6 +634,7 @@ def main(argv: list[str] | None = None) -> int:
 - 日志 / TensorBoard：`{log_dir}`
 - 检查点 / 索引：`{ckpt_dir}`
 - 先验：`datasets/pretrain_ckpt/pretrained_lafan_run.pt`（sha256 `{info.get("prior_sha256")}`，未修改）
+- 原始GSI片段与噪声：`{info.get("gsi_archive_dir")}`（完整性/FIFO逐批核验另见执行目录archive_check.json）
 - 代码提交：`{info.get("git_commit")}`（分支 `{info.get("git_branch")}`）；启动时工作区状态见 `run_info.json` 的 `git_dirty`
 
 ## 验收明细
