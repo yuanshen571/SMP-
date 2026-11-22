@@ -141,7 +141,7 @@ class PairTests(unittest.TestCase):
     with self.assertRaises(AssertionError):
       consumer.load_batch(env, 1024)
 
-  def test_mixed_skip_and_early_stop_reach_native_pool_in_source_order(self):
+  def test_large_and_small_joint_failures_are_both_searched_in_source_order(self):
     import noise_rescue as nr
     from test_search import identity_decode
     from verify_pairing import verify_decisions
@@ -182,12 +182,14 @@ class PairTests(unittest.TestCase):
       result = consumer.sample(env, 1024)
     entry = consumer.audit["batches"][0]
     verify_decisions(entry)
-    self.assertEqual(entry["stats"]["skipped_original_inserted"], 1)
+    self.assertEqual(entry["stats"]["skipped_original_inserted"], 0)
+    self.assertEqual(entry["stats"]["attempted"], 2)
     self.assertEqual(entry["stats"]["early_stopped"], 1)
-    self.assertEqual(entry["stats"]["generations"], 10)
+    self.assertEqual(entry["stats"]["generations"], 40)
+    self.assertEqual(entry["stats"]["exhausted"], 1)
     self.assertEqual(entry["original_passed"], 1022)
     raw = torch.load(self.directory / "batch_0000.pt", weights_only=False)["windows"]
-    self.assertTrue(torch.equal(result[0], raw[0]))
+    self.assertFalse(torch.equal(result[0], raw[0]))
     self.assertTrue(torch.equal(result[2:], raw[2:]))
     self.assertFalse(torch.equal(result[1], raw[1]))
     self.assertTrue(torch.equal(rng, torch.get_rng_state()))

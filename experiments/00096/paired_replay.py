@@ -250,8 +250,8 @@ class PairedConsumer:
     )
     assert np.isfinite(output).all() and output.shape == (1024, 10, 59)
     assert np.array_equal(output[original_passed], original_array[original_passed])
-    skipped = (~original_passed) & (original_metrics["joint"] > np.deg2rad(0.42))
-    assert np.array_equal(output[skipped], original_array[skipped])
+    assert stats["skipped_original_inserted"] == 0
+    assert stats["attempted"] == int((~original_passed).sum())
     result = torch.as_tensor(output.copy(), device=env.device, dtype=torch.float32)
     # The native caller still owns actual GSI FIFO writes and reset sampling.
     head = entry["fifo_head_before"]

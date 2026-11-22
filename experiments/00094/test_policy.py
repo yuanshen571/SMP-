@@ -74,28 +74,51 @@ class PolicyTests(unittest.TestCase):
       )
     )
     self.assertTrue(np.array_equal(out[passed], raw.numpy()[passed]))
-    self.assertEqual(stats["attempted"] + stats["skipped_original_inserted"], 1)
+    self.assertEqual(stats["attempted"], 1)
+    self.assertEqual(stats["skipped_original_inserted"], 0)
     return out, mask, stats, decisions[0]
 
-  def test_above_042_skips_all_search_and_keeps_original_invalid(self):
-    class Forbidden:
-      def __init__(self, **kwargs):
-        raise AssertionError("a skipped row must not allocate an optimizer")
-
-    out, mask, s, d = self.run_case(np.deg2rad(0.420001), None, factory=Forbidden)
-    self.assertTrue((out == 0).all())
+  def test_large_angle_enters_search_and_can_early_stop(self):
+    joint0 = np.deg2rad(3.0)
+    out, mask, stats, decision = self.run_case(
+      joint0, GateScorer(lambda g: np.full(len(g), joint0 * 0.9))
+    )
+    self.assertEqual(
+      (
+        stats["attempted"],
+        stats["skipped_original_inserted"],
+        stats["early_stopped"],
+        stats["generations"],
+      ),
+      (1, 0, 1, 10),
+    )
     self.assertFalse(mask[1])
-    self.assertEqual(
-      (s["attempted"], s["skipped_original_inserted"], s["search_decode_calls"]),
-      (0, 1, 0),
-    )
-    self.assertTrue(d["selected_original"])
+    self.assertFalse(decision["selected_original"])
+    self.assertGreater(out[1, 0, 0], 0.009)
 
-  def test_exact_042_still_enters_search(self):
-    _, _, s, _ = self.run_case(np.deg2rad(0.42), GateScorer(lambda g: np.zeros(len(g))))
-    self.assertEqual(
-      (s["attempted"], s["skipped_original_inserted"], s["exhausted"]), (1, 0, 1)
+  def test_large_angle_can_continue_to30_when_improvement_is_sufficient(self):
+    joint0 = np.deg2rad(3.0)
+    _, _, stats, _ = self.run_case(
+      joint0, GateScorer(lambda g: np.full(len(g), joint0 * 0.8))
     )
+    self.assertEqual(
+      (
+        stats["attempted"],
+        stats["skipped_original_inserted"],
+        stats["exhausted"],
+        stats["generations"],
+      ),
+      (1, 0, 1, 30),
+    )
+
+  def test_large_angle_can_succeed_before_generation10(self):
+    joint0 = np.deg2rad(3.0)
+    _, mask, stats, _ = self.run_case(
+      joint0, GateScorer(lambda g: np.zeros(len(g)), success_at=2)
+    )
+    self.assertTrue(mask.all())
+    self.assertEqual((stats["succeeded"], stats["generations"]), (1, 2))
+    self.assertEqual(stats["skipped_original_inserted"], 0)
 
   def test_under_15_percent_stops_at10_with_best_combined_fitness(self):
     out, _, s, d = self.run_case(0.006, GateScorer(lambda g: np.full(len(g), 0.0054)))
@@ -163,6 +186,16 @@ class PolicyTests(unittest.TestCase):
     )
     self.assertEqual(s["early_stopped"], 1)
     self.assertEqual(s["radius_rejected"], 160)
+
+  def test_nonzero_skip_counter_and_old_angle_rule_are_rejected(self):
+    with self.assertRaises(AssertionError):
+      nr.SearchConfig(skip_joint_excess_deg=0.42).validate()
+    _, _, stats, decision = self.run_case(
+      0.05, GateScorer(lambda g: np.full(len(g), 0.049))
+    )
+    stats["skipped_original_inserted"] = 1
+    with self.assertRaises(AssertionError):
+      verify_decisions(dict(stats=stats, decisions=[decision], global_row_start=1024))
 
   def test_bad_decision_audit_is_rejected(self):
     _, _, s, d = self.run_case(0.006, GateScorer(lambda g: np.full(len(g), 0.0054)))

@@ -7,7 +7,6 @@ import json
 import math
 from pathlib import Path
 
-import numpy as np
 from archive_format import atomic_json
 from paired_replay import source_binding
 
@@ -15,7 +14,8 @@ from paired_replay import source_binding
 def verify_decisions(entry):
   stats = entry["stats"]
   decisions = entry["decisions"]
-  assert len(decisions) == stats["attempted"] + stats["skipped_original_inserted"]
+  assert stats["skipped_original_inserted"] == 0
+  assert len(decisions) == stats["attempted"]
   rows = [d["original_row"] for d in decisions]
   assert rows == sorted(set(rows))
   assert all(
@@ -27,7 +27,6 @@ def verify_decisions(entry):
       "physical_success",
       "generation_limit",
       "joint_improvement_below_15_percent",
-      "joint_above_0.42_deg",
     )
   }
   checked = continued = exempt = 0
@@ -35,11 +34,6 @@ def verify_decisions(entry):
     reason, gen, joint0 = d["reason"], d["generation"], d["original_joint_rad"]
     assert reason in counts
     counts[reason] += 1
-    if reason == "joint_above_0.42_deg":
-      assert joint0 > np.deg2rad(0.42) and gen == 0
-      assert d["selected_original"] and not d["final_passed"] and not d["gate_applied"]
-      continue
-    assert joint0 is None or joint0 <= np.deg2rad(0.42)
     assert 1 <= gen <= 30 and not d["selected_original"]
     assert d["selected_rms"] <= 0.15 and math.isfinite(d["selected_fitness"])
     exempt += int(joint0 is None or joint0 <= 1e-5)
@@ -68,7 +62,6 @@ def verify_decisions(entry):
   assert stats["succeeded"] == counts["physical_success"]
   assert stats["exhausted"] == counts["generation_limit"]
   assert stats["early_stopped"] == counts["joint_improvement_below_15_percent"]
-  assert stats["skipped_original_inserted"] == counts["joint_above_0.42_deg"]
   assert stats["joint_gate_exempt"] == exempt
   assert stats["joint_improvement_checked"] == checked
   assert stats["joint_improvement_continued"] == continued

@@ -36,7 +36,7 @@ def check_files(*, quiet=False):
   assert spec["noise_rescue"]["initial_sigma"] == 0.05
   assert spec["noise_rescue"]["rms_limit"] == 0.15
   assert spec["parent_experiment"] == "00092"
-  assert spec["noise_rescue"]["skip_joint_excess_deg"] == 0.42
+  assert spec["noise_rescue"]["skip_joint_excess_deg"] is None
   assert spec["noise_rescue"]["improvement_generation"] == 10
   assert spec["noise_rescue"]["minimum_joint_improvement"] == 0.15
   assert spec["gpu_module"]["pair_dtype"] == "float64"

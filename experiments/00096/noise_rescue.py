@@ -32,7 +32,7 @@ class SearchConfig:
   rms_limit: float = 0.15
   coordinate_bound: float = 1.0
   inference_batch_size: int = 1024
-  skip_joint_excess_deg: float = 0.42
+  skip_joint_excess_deg: None = None
   improvement_generation: int = 10
   minimum_joint_improvement: float = 0.15
   joint_tolerance_rad: float = 1e-5
@@ -44,7 +44,7 @@ class SearchConfig:
     assert self.coordinate_bound == 1.0
     assert self.inference_batch_size >= self.population_size
     assert self.inference_batch_size % self.population_size == 0
-    assert self.skip_joint_excess_deg == 0.42
+    assert self.skip_joint_excess_deg is None
     assert self.improvement_generation == 10
     assert self.minimum_joint_improvement == 0.15
     assert self.joint_tolerance_rad == 1e-5
@@ -212,7 +212,7 @@ def search_batch(
   optimizer_factory=SepCMA,
   log=print,
 ):
-  """00091 search with explicit high-angle skips and a one-time joint gate.
+  """Search every physically invalid row with a one-time joint-improvement gate.
 
   A completed job frees its fixed block for the next failed row. Per-row RNGs
   and posterior tensors are independent of how other jobs finish.
@@ -231,27 +231,10 @@ def search_batch(
   assert np.array_equal(original_metrics["passed"], final_passed)
   original_joint = np.asarray(original_metrics["joint"], dtype=np.float64)
   assert original_joint.shape == (B,)
-  skip = (
-    (~final_passed)
-    & np.isfinite(original_joint)
-    & (original_joint > np.deg2rad(config.skip_joint_excess_deg))
-  )
-  failed = np.flatnonzero((~final_passed) & (~skip)).tolist()
+  # No angle eligibility cutoff: every physically invalid original is searched.
+  failed = np.flatnonzero(~final_passed).tolist()
   stats = _initial_stats()
-  stats["skipped_original_inserted"] = int(skip.sum())
   stats["attempted"] = len(failed)
-  for row in np.flatnonzero(skip):
-    decisions.append(
-      dict(
-        original_row=int(global_start + row),
-        reason="joint_above_0.42_deg",
-        original_joint_rad=float(original_joint[row]),
-        generation=0,
-        gate_applied=False,
-        selected_original=True,
-        final_passed=False,
-      )
-    )
   if not failed:
     return output, final_passed, stats
   started = time.perf_counter()

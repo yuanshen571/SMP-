@@ -27,6 +27,53 @@ def spec(exp):
   return json.loads((ROOT / "experiments" / exp / "EXPERIMENT.json").read_text())
 
 
+def without_angle_skip(name, source):
+  """The only declared method change relative to the original 00092 adapter."""
+  if name == "noise_rescue.py":
+    source = source.replace(
+      "skip_joint_excess_deg: float = 0.42", "skip_joint_excess_deg: None = None"
+    )
+    source = source.replace(
+      "assert self.skip_joint_excess_deg == 0.42",
+      "assert self.skip_joint_excess_deg is None",
+    )
+    source = source.replace(
+      "00091 search with explicit high-angle skips and a one-time joint gate.",
+      "Search every physically invalid row with a one-time joint-improvement gate.",
+    )
+    start = source.index("  skip = (\n", source.index("def search_batch("))
+    end = source.index("  if not failed:", start)
+    source = (
+      source[:start]
+      + """  # No angle eligibility cutoff: every physically invalid original is searched.
+  failed = np.flatnonzero(~final_passed).tolist()
+  stats = _initial_stats()
+  stats["attempted"] = len(failed)
+"""
+      + source[end:]
+    )
+  elif name == "paired_replay.py":
+    source = source.replace(
+      '    skipped = (~original_passed) & (original_metrics["joint"] > np.deg2rad(0.42))\n    assert np.array_equal(output[skipped], original_array[skipped])\n',
+      '    assert stats["skipped_original_inserted"] == 0\n    assert stats["attempted"] == int((~original_passed).sum())\n',
+    )
+  elif name == "verify_pairing.py":
+    source = source.replace(
+      '  assert len(decisions) == stats["attempted"] + stats["skipped_original_inserted"]',
+      '  assert stats["skipped_original_inserted"] == 0\n  assert len(decisions) == stats["attempted"]',
+    )
+    source = source.replace('      "joint_above_0.42_deg",\n', "")
+    start = source.index('    if reason == "joint_above_0.42_deg":')
+    end = source.index("    assert 1 <= gen", start)
+    source = source[:start] + source[end:]
+    source = source.replace(
+      '  assert stats["skipped_original_inserted"] == counts["joint_above_0.42_deg"]\n',
+      "",
+    )
+    source = source.replace("import numpy as np\n", "")
+  return source
+
+
 def check(exp):
   seed, parent, control = CASES[exp]
   here = ROOT / "experiments" / exp
@@ -60,6 +107,13 @@ def check(exp):
       assert current[key] == old[key], key
     a, b = dict(current["noise_rescue"]), dict(old["noise_rescue"])
     assert a.pop("seed_formula") == b.pop("seed_formula").replace("2027", str(seed))
+    assert a.pop("skip_joint_excess_deg") is None
+    assert b.pop("skip_joint_excess_deg") == 0.42
+    assert (
+      a.pop("failed_admission")
+      == "searched historical best for poor-improvement or generation budget; all physically invalid originals are searched, no angle eligibility cutoff"
+    )
+    b.pop("failed_admission")
     assert a == b
     assert current["control"]["experiment"] == control
     assert current["control"]["seed"] == seed
@@ -95,9 +149,10 @@ def check(exp):
     ]
   # No seed variants are allowed to silently change the sampling/search algorithm.
   for name in files:
-    assert (here / name).read_text() == renamed(
-      (here.parent / parent / name).read_text(), mapping
-    ), name
+    expected_source = renamed((here.parent / parent / name).read_text(), mapping)
+    if control:
+      expected_source = without_angle_skip(name, expected_source)
+    assert (here / name).read_text() == expected_source, name
   run_name = f"run_{exp}.py"
   expected = renamed((here.parent / parent / f"run_{parent}.py").read_text(), mapping)
   expected = (

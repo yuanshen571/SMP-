@@ -244,14 +244,15 @@ def main(argv: list[str] | None = None) -> int:
     and info.get("gpu_pair_dtype") == "torch.float64",
   )
   report.check(
-    "00096 search budget and angle/improvement gates",
+    "00096 search budget and joint-improvement gate (no angle eligibility cutoff)",
     cfg.get("max_generations") == 30
     and cfg.get("sigma0") == 0.05
     and cfg.get("rms_limit") == 0.15
     and cfg.get("population_size") == 32
     and cfg.get("coordinate_bound") == 1.0
     and cfg.get("inference_batch_size") == 1024
-    and cfg.get("skip_joint_excess_deg") == 0.42
+    and "skip_joint_excess_deg" in cfg
+    and cfg["skip_joint_excess_deg"] is None
     and cfg.get("improvement_generation") == 10
     and cfg.get("minimum_joint_improvement") == 0.15
     and cfg.get("joint_tolerance_rad") == 1e-5,

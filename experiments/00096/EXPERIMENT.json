@@ -52,7 +52,7 @@
     "refresh_ppo_iterations": 100,
     "sampling": "native uniform replacement"
   },
-  "only_training_change": "00092 method unchanged; seed 2026; independent experiment/metric/archive identity; paired queue only",
+  "only_training_change": "00092 with no high-angle skip; GPU filter + generation-10 joint-improvement early stop; seed 2026; paired source and other settings unchanged",
   "initialization": "actual completed formal 00095 initial_untrained.pt; models only, fresh optimizer, no iteration resume",
   "physical_filter_enabled": true,
   "physical_manifest_sha256": "9b039f63f02604630bbbc5705c15af214f5a4899cc12a517fda1b0a1f906d279",
@@ -75,13 +75,13 @@
     "optimize": "initial noise only",
     "fixed_posterior_noises": 49,
     "stop": "first strict physical pass; otherwise generation 10 joint improvement < 0.15 for originally joint-invalid rows; otherwise generation 30",
-    "failed_admission": "searched historical best for poor-improvement or generation budget; original only for >0.42 deg skip",
+    "failed_admission": "searched historical best for poor-improvement or generation budget; all physically invalid originals are searched, no angle eligibility cutoff",
     "seed_formula": "(2026 + 10000 + global_original_row) % 2**32",
     "motion_preservation_gate": false,
     "raw_and_search_decode_batch_size": 1024,
     "concurrent_cases": 32,
     "objective": "V=(max(0,joint_rad-1e-5)/(pi/180))**2+max(0,ground_mm-19.72)**2+self_mm**2; failed=10000+V; pass=V",
-    "skip_joint_excess_deg": 0.42,
+    "skip_joint_excess_deg": null,
     "improvement_generation": 10,
     "minimum_joint_improvement": 0.15,
     "joint_improvement": "(raw maximum joint excess - minimum candidate maximum joint excess across generations 1..10)/raw maximum joint excess; only bounded numeric candidates; gate applies only if raw excess >1e-5 rad; exactly 15% continues",
@@ -115,7 +115,7 @@
     "mode": "read-only; initial + 49 fixed posterior noise tensors; no new raw DDPM draws"
   },
   "physical_source_sha256": "b7da8dccb5f0141ba999015d4bceac5fe2b60472fb2ecd2e6986639d41baf4f0",
-  "noise_engine_sha256": "2ac9f4dbfb595965e0a05b9cbacc4d7808f807ae823432ca0d27eacaf57563b2",
+  "noise_engine_sha256": "442fac7cab98d4e865273a82df6abc901b5fba33af17a8a9053be3759f5b0a26",
   "gpu_module": {
     "source": "/root/gpufree-share/gpu_filter_20261122",
     "device": "cuda:0",
