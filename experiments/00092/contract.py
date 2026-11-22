@@ -1,0 +1,138 @@
+"""Check exact baseline source, the new experiment identity and shared SDK."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.metadata
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+EXP = Path(__file__).resolve().parent
+
+
+def check_files(*, quiet=False):
+  spec = json.loads((EXP / "EXPERIMENT.json").read_text())
+  expected = json.loads((EXP / "BASELINE_FILES.json").read_text())
+  for name, digest in expected.items():
+    actual = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    assert actual == digest, f"baseline file changed: {name}"
+  tracked = subprocess.check_output(["git", "ls-files", "src"], cwd=ROOT, text=True)
+  assert set(tracked.splitlines()) == {p for p in expected if p.startswith("src/")}
+  assert spec["experiment"] == EXP.name and spec["seed"] == 2027
+  assert spec["num_envs"] == 1024 and spec["num_steps_per_env"] == 24
+  assert spec["iterations"] == 20000 and spec["samples"] == 491520000
+  assert spec["physical_filter_enabled"] is True
+  assert spec["mixed_cache_enabled"] is spec["clustering_enabled"] is False
+  assert spec["noise_rescue_enabled"] is True
+  assert spec["paired_archive"]["source_rows"] == 208896
+  assert spec["paired_archive"]["source_shards"] == 204
+  assert spec["noise_rescue"]["max_generations"] == 30
+  assert spec["noise_rescue"]["initial_sigma"] == 0.05
+  assert spec["noise_rescue"]["rms_limit"] == 0.15
+  assert spec["parent_experiment"] == "00091"
+  assert spec["noise_rescue"]["skip_joint_excess_deg"] == 0.42
+  assert spec["noise_rescue"]["improvement_generation"] == 10
+  assert spec["noise_rescue"]["minimum_joint_improvement"] == 0.15
+  assert spec["gpu_module"]["pair_dtype"] == "float64"
+  for name, digest in spec["gpu_module"]["source_files"].items():
+    assert hashlib.sha256((EXP / name).read_bytes()).hexdigest() == digest, name
+  assert spec["physical_filter"]["repair_small_joints"] is False
+  assert (
+    hashlib.sha256((EXP / "gsi_physics.py").read_bytes()).hexdigest()
+    == spec["physical_source_sha256"]
+  )
+  assert (
+    hashlib.sha256((EXP / "noise_rescue.py").read_bytes()).hexdigest()
+    == spec["noise_engine_sha256"]
+  )
+  vendor = json.loads((EXP / "VENDOR_SOURCE.json").read_text())
+  for name, digest in vendor["files"].items():
+    assert hashlib.sha256((EXP / "vendor" / name).read_bytes()).hexdigest() == digest
+  from noise_rescue import SearchConfig
+
+  SearchConfig().validate()
+  assert spec["rng_protocol"]["training_seed"] == 2027
+  assert spec["rng_protocol"]["gsi_seed"] == 102027
+  if not quiet:
+    print(
+      f"BASELINE_SOURCE_CHECK=PASS ({len(expected)} files, {spec['repeats_experiment']}, seed 2027)"
+    )
+  return spec
+
+
+def main():
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--environment", action="store_true")
+  parser.add_argument("--out", type=Path)
+  args = parser.parse_args()
+  spec = check_files()
+  result = {
+    "experiment": spec["experiment"],
+    "seed": 2027,
+    "baseline_commit": spec["baseline_commit"],
+  }
+  if args.environment:
+    import torch
+
+    archive_mount = Path("/root/gpufree-share")
+    assert archive_mount.is_dir(), (
+      "requested /root/gpufree-share missing; verify shared storage path, do not create a system-disk substitute"
+    )
+    assert archive_mount.is_dir()
+
+    assert Path(sys.prefix).resolve() == (ROOT.parent / "venv").resolve(), (
+      "reuse shared venv"
+    )
+    package = importlib.util.find_spec("smp")
+    assert (
+      package is not None
+      and Path(package.origin).resolve() == ROOT / "src/smp/__init__.py"
+    ), "editable smp must point to this shared repo"
+    versions = {
+      name: importlib.metadata.version(name)
+      for name in (
+        "torch",
+        "numpy",
+        "mujoco",
+        "mjlab",
+        "mujoco-warp",
+        "rsl-rl-lib",
+        "tensorboard",
+      )
+    }
+    assert versions["mjlab"] == "1.6.0" and versions["mujoco"] == "3.11.0"
+    assert versions["mujoco-warp"] == "3.11.0" and versions["rsl-rl-lib"] == "5.4.2"
+    assert versions["torch"].startswith("2.10.")
+    assert torch.cuda.is_available(), "server CUDA required"
+    gpu = torch.cuda.get_device_name(0)
+    assert "L40" in gpu, f"expected the agreed L40, found {gpu}"
+    uv = ROOT.parent / "tools/uv"
+    executable = str(uv) if uv.is_file() else shutil.which("uv")
+    if executable:
+      subprocess.run(
+        [executable, "pip", "check", "--python", sys.executable], check=True
+      )
+    else:
+      subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
+    result.update(
+      versions=versions,
+      gpu=gpu,
+      python=sys.version,
+      shared_env=str(Path(sys.prefix).resolve()),
+      archive_mount=str(archive_mount.resolve()),
+      archive_free_bytes=shutil.disk_usage(archive_mount).free,
+    )
+    print("SHARED_ENVIRONMENT_CHECK=PASS")
+  if args.out:
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+  main()
