@@ -57,8 +57,6 @@ mark_stage tests
 for test in test_variant test_reward_formula test_passive_metrics test_initialization test_search test_policy test_scoring test_gpu_cpu_reference test_physics test_pairing; do
   run_logged "${EXECUTION}/${test}" "${PYTHON}" "${PREFIX}/${test}.py"
 done
-mark_stage gpu_filter_equivalence
-run_logged "${EXECUTION}/gpu_equivalence" "${PYTHON}" "${PREFIX}/accept_gpu.py" --control-info "${CONTROL_INFO}" --out "${EXECUTION}/gpu_equivalence.json"
 mark_stage frozen_prior_replay
 run_logged "${EXECUTION}/sampler_replay" "${PYTHON}" "${PREFIX}/accept_sampler.py" --control-info "${CONTROL_INFO}" --out "${EXECUTION}/sampler_replay.json"
 mark_stage smoke

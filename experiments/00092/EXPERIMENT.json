@@ -125,6 +125,7 @@
       "gpu_filter.py": "b51c8822d0f5853ed37041b0d00a97d951c56133454352778974f782328a4387",
       "gpu_scorer.py": "43159ba882257fa9e78be36e088fa9082c80202407de8f89c88a417c7ee106b4"
     },
-    "source_validation": "source README reports CPU/GPU equality and 6.6x end-to-end search speedup; not rerun locally; actual task-model CUDA acceptance mandatory before training"
+    "source_validation": "CPU/GPU filter and scorer equality already completed and confirmed by user on 2026-11-22; reuse existing results and pinned module SHA256; no pretraining equivalence rerun",
+    "pretraining_equivalence_rerun": false
   }
 }
